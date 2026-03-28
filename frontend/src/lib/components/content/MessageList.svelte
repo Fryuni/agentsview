@@ -154,9 +154,13 @@
     sessionActivity.firstVisibleTimestamp = null;
   }
 
-  // Recompute visible timestamp when minimap opens.
+  // Recompute visible timestamp when minimap opens or
+  // message content changes (e.g. SSE reload).
   $effect(() => {
     if (ui.activityMinimapOpen) {
+      // Track message array so the effect re-runs after
+      // content changes while the minimap is open.
+      void messages.messages.length;
       publishVisibleTimestamp();
     }
   });

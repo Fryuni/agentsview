@@ -41,6 +41,7 @@ class MessagesStore {
       return;
     }
     this.clear();
+    this._stableMainModel = "";
     this.sessionId = id;
     this.loading = true;
 
