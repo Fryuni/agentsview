@@ -439,6 +439,7 @@ class MessagesStore {
     signal: AbortSignal,
     messageCountHint?: number,
   ) {
+    clearContentCaches();
     this.loading = true;
     try {
       if (
