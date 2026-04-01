@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { importClaudeAI, importChatGPT } from "../../api/client.js";
+  import {
+    importClaudeAI,
+    importChatGPT,
+  } from "../../api/client.js";
 
   interface Props {
     open: boolean;
@@ -7,21 +10,50 @@
     onimported: () => void;
   }
 
-  let { open = $bindable(), onclose, onimported }: Props = $props();
+  let {
+    open = $bindable(),
+    onclose,
+    onimported,
+  }: Props = $props();
 
-  let fileInput: HTMLInputElement | undefined = $state();
-  let selectedFile: File | null = $state(null);
-  let provider: "claude-ai" | "chatgpt" = $state("claude-ai");
-  let importing = $state(false);
-  let result: {
+  type ImportResult = {
     imported: number;
     updated: number;
     skipped?: number;
     errors: number;
-  } | null = $state(null);
-  let error: string | null = $state(null);
+  };
 
-  // Reset file selection when provider changes.
+  let fileInput: HTMLInputElement | undefined = $state();
+  let selectedFile = $state<File | null>(null);
+  let provider: "claude-ai" | "chatgpt" =
+    $state("claude-ai");
+  let importing = $state(false);
+  let dragOver = $state(false);
+  let dragCount = $state(0);
+  let result = $state<ImportResult | null>(null);
+  let error = $state<string | null>(null);
+
+  const fileSize = $derived(
+    selectedFile
+      ? selectedFile.size < 1024 * 1024
+        ? `${(selectedFile.size / 1024).toFixed(1)} KB`
+        : `${(selectedFile.size / (1024 * 1024)).toFixed(1)} MB`
+      : "",
+  );
+
+  const accepted = $derived(
+    provider === "claude-ai" ? ".json,.zip" : ".zip",
+  );
+
+  const totalProcessed = $derived(
+    result
+      ? result.imported +
+          result.updated +
+          (result.skipped ?? 0)
+      : 0,
+  );
+
+  // Reset file when provider changes.
   $effect(() => {
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
     provider;
@@ -31,11 +63,66 @@
     if (fileInput) fileInput.value = "";
   });
 
+  function selectProvider(p: typeof provider) {
+    if (importing) return;
+    provider = p;
+  }
+
   function handleFileChange(e: Event) {
     const input = e.target as HTMLInputElement;
     selectedFile = input.files?.[0] ?? null;
     result = null;
     error = null;
+  }
+
+  function handleDragEnter(e: DragEvent) {
+    e.preventDefault();
+    dragCount++;
+    if (!importing) dragOver = true;
+  }
+
+  function handleDragOver(e: DragEvent) {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+  }
+
+  function handleDragLeave() {
+    dragCount--;
+    if (dragCount <= 0) {
+      dragCount = 0;
+      dragOver = false;
+    }
+  }
+
+  function handleDrop(e: DragEvent) {
+    e.preventDefault();
+    dragCount = 0;
+    dragOver = false;
+    if (importing) return;
+
+    const file = e.dataTransfer?.files[0];
+    if (!file) return;
+
+    const ext =
+      file.name.toLowerCase().split(".").pop() ?? "";
+    const allowed =
+      provider === "claude-ai"
+        ? ["json", "zip"]
+        : ["zip"];
+    if (!allowed.includes(ext)) {
+      error =
+        `Expected ${allowed.map((s) => "." + s).join(" or ")} file`;
+      return;
+    }
+    selectedFile = file;
+    result = null;
+    error = null;
+  }
+
+  function clearFile() {
+    selectedFile = null;
+    error = null;
+    if (fileInput) fileInput.value = "";
   }
 
   async function handleImport() {
@@ -53,7 +140,10 @@
       }
       onimported();
     } catch (e) {
-      error = e instanceof Error ? e.message : "Import failed";
+      error =
+        e instanceof Error
+          ? e.message
+          : "Import failed";
     } finally {
       importing = false;
     }
@@ -64,71 +154,296 @@
     selectedFile = null;
     result = null;
     error = null;
+    dragOver = false;
+    dragCount = 0;
     open = false;
     onclose();
+  }
+
+  function handleReset() {
+    selectedFile = null;
+    result = null;
+    error = null;
+    if (fileInput) fileInput.value = "";
   }
 </script>
 
 {#if open}
-  <div class="modal-backdrop" role="presentation" onkeydown={(e) => e.key === "Escape" && handleClose()} onclick={handleClose}>
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <!-- svelte-ignore a11y_interactive_supports_focus -->
-    <div class="modal" role="dialog" aria-modal="true" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === "Escape" && handleClose()}>
-      <h3>Import Conversations</h3>
-
-      <div class="provider-select">
-        <label>
-          <input type="radio" bind:group={provider} value="claude-ai" disabled={importing} />
-          Claude.ai
-        </label>
-        <label>
-          <input type="radio" bind:group={provider} value="chatgpt" disabled={importing} />
-          ChatGPT
-        </label>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="modal-overlay"
+    onclick={(e) => {
+      if (
+        (e.target as HTMLElement).classList.contains(
+          "modal-overlay",
+        )
+      )
+        handleClose();
+    }}
+    onkeydown={(e) => {
+      if (e.key === "Escape") handleClose();
+    }}
+  >
+    <div
+      class="modal-panel import-panel"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Import conversations"
+    >
+      <div class="modal-header">
+        <h3 class="modal-title">Import Conversations</h3>
+        <button
+          class="modal-close"
+          onclick={handleClose}
+          disabled={importing}
+          aria-label="Close"
+        >&times;</button>
       </div>
 
-      <p class="instructions">
-        {#if provider === "claude-ai"}
-          Upload <code>conversations.json</code> or a <code>.zip</code> from a Claude.ai data export.
+      <div class="modal-body">
+        {#if result}
+          <!-- ── Results ── -->
+          <div class="result-view">
+            <div class="result-check">
+              <svg
+                width="32"
+                height="32"
+                viewBox="0 0 24 24"
+                fill="none"
+              >
+                <circle
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="var(--accent-green)"
+                  stroke-width="1.5"
+                />
+                <path
+                  d="M8 12l3 3 5-5"
+                  stroke="var(--accent-green)"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </div>
+
+            <p class="result-heading">
+              {totalProcessed}
+              conversation{totalProcessed !== 1
+                ? "s"
+                : ""}
+              processed
+            </p>
+
+            <div class="result-stats">
+              <div class="stat">
+                <span class="stat-num new">
+                  {result.imported}
+                </span>
+                <span class="stat-lbl">new</span>
+              </div>
+              <div class="stat">
+                <span class="stat-num updated">
+                  {result.updated}
+                </span>
+                <span class="stat-lbl">updated</span>
+              </div>
+              {#if (result.skipped ?? 0) > 0}
+                <div class="stat">
+                  <span class="stat-num skipped">
+                    {result.skipped}
+                  </span>
+                  <span class="stat-lbl">skipped</span>
+                </div>
+              {/if}
+              {#if result.errors > 0}
+                <div class="stat">
+                  <span class="stat-num errors">
+                    {result.errors}
+                  </span>
+                  <span class="stat-lbl">errors</span>
+                </div>
+              {/if}
+            </div>
+
+            <div class="result-actions">
+              <button
+                class="modal-btn"
+                onclick={handleReset}
+              >
+                Import more
+              </button>
+              <button
+                class="modal-btn modal-btn-primary"
+                onclick={handleClose}
+              >
+                Done
+              </button>
+            </div>
+          </div>
         {:else}
-          Upload a <code>.zip</code> from a ChatGPT data export.
-        {/if}
-      </p>
+          <!-- ── Provider selector ── -->
+          <div class="provider-strip">
+            <button
+              class="provider-pill"
+              class:selected={provider === "claude-ai"}
+              onclick={() => selectProvider("claude-ai")}
+              disabled={importing}
+            >
+              <span class="pdot claude"></span>
+              <span>Claude.ai</span>
+            </button>
+            <button
+              class="provider-pill"
+              class:selected={provider === "chatgpt"}
+              onclick={() => selectProvider("chatgpt")}
+              disabled={importing}
+            >
+              <span class="pdot chatgpt"></span>
+              <span>ChatGPT</span>
+            </button>
+          </div>
 
-      <input
-        bind:this={fileInput}
-        type="file"
-        accept={provider === "claude-ai" ? ".json,.zip" : ".zip"}
-        onchange={handleFileChange}
-        disabled={importing}
-      />
+          <p class="hint">
+            {#if provider === "claude-ai"}
+              Upload <code>conversations.json</code> or
+              the <code>.zip</code> from a Claude.ai data
+              export.
+            {:else}
+              Upload the <code>.zip</code> from a ChatGPT
+              data export.
+            {/if}
+          </p>
 
-      {#if error}
-        <p class="error">{error}</p>
-      {/if}
-
-      {#if result}
-        <p class="success">
-          {result.imported + result.updated + (result.skipped ?? 0)} conversations processed
-          ({result.imported} new{#if result.updated > 0}, {result.updated} updated{/if}{#if (result.skipped ?? 0) > 0}, {result.skipped} skipped{/if})
-          {#if result.errors > 0}
-            , {result.errors} errors
+          <!-- ── Drop zone ── -->
+          {#if importing}
+            <div class="zone zone-importing">
+              <div class="modal-spinner"></div>
+              <span class="importing-label">
+                Importing conversations...
+              </span>
+            </div>
+          {:else if selectedFile}
+            <div class="zone zone-file">
+              <div class="file-row">
+                <svg
+                  class="file-icon"
+                  width="20"
+                  height="20"
+                  viewBox="0 0 16 16"
+                  fill="currentColor"
+                >
+                  <path d="M4 0a2 2 0 00-2 2v12a2 2 0 002 2h8a2 2 0 002-2V4.5L9.5 0H4zM9 1v3.5A1.5 1.5 0 0010.5 6H14v8a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1h5z"/>
+                </svg>
+                <div class="file-meta">
+                  <span class="file-name">
+                    {selectedFile.name}
+                  </span>
+                  <span class="file-size">
+                    {fileSize}
+                  </span>
+                </div>
+                <button
+                  class="file-clear"
+                  onclick={clearFile}
+                  title="Remove file"
+                  aria-label="Remove file"
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 16 16"
+                    fill="currentColor"
+                  >
+                    <path d="M4.646 4.646a.5.5 0 01.708 0L8 7.293l2.646-2.647a.5.5 0 01.708.708L8.707 8l2.647 2.646a.5.5 0 01-.708.708L8 8.707l-2.646 2.647a.5.5 0 01-.708-.708L7.293 8 4.646 5.354a.5.5 0 010-.708z"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          {:else}
+            <div
+              class="zone zone-empty"
+              class:drag-over={dragOver}
+              role="button"
+              tabindex="0"
+              ondragenter={handleDragEnter}
+              ondragover={handleDragOver}
+              ondragleave={handleDragLeave}
+              ondrop={handleDrop}
+              onclick={() => fileInput?.click()}
+              onkeydown={(e) => {
+                if (
+                  e.key === "Enter" ||
+                  e.key === " "
+                ) {
+                  e.preventDefault();
+                  fileInput?.click();
+                }
+              }}
+            >
+              <svg
+                class="upload-icon"
+                width="28"
+                height="28"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+              <span class="drop-label">
+                Drop your file here
+              </span>
+              <span class="drop-sub">
+                or click to browse
+              </span>
+            </div>
           {/if}
-        </p>
-      {/if}
 
-      <div class="actions">
-        <button onclick={handleClose} disabled={importing}>
-          {result ? "Close" : "Cancel"}
-        </button>
-        {#if !result}
-          <button
-            class="primary"
-            onclick={handleImport}
-            disabled={!selectedFile || importing}
-          >
-            {importing ? "Importing..." : "Import"}
-          </button>
+          <input
+            bind:this={fileInput}
+            type="file"
+            accept={accepted}
+            onchange={handleFileChange}
+            class="sr-only"
+          />
+
+          {#if error}
+            <div class="import-error">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 16 16"
+                fill="currentColor"
+              >
+                <path d="M8.982 1.566a1.13 1.13 0 00-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 01-1.1 0L7.1 5.995A.905.905 0 018 5zm.002 6a1 1 0 110 2 1 1 0 010-2z"/>
+              </svg>
+              <span>{error}</span>
+            </div>
+          {/if}
+
+          <div class="import-actions">
+            <button
+              class="modal-btn"
+              onclick={handleClose}
+              disabled={importing}
+            >
+              Cancel
+            </button>
+            <button
+              class="modal-btn modal-btn-primary"
+              onclick={handleImport}
+              disabled={!selectedFile || importing}
+            >
+              Import
+            </button>
+          </div>
         {/if}
       </div>
     </div>
@@ -136,98 +451,381 @@
 {/if}
 
 <style>
-  .modal-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+  /* ── Panel ── */
+  .import-panel {
+    width: 460px;
+    max-width: 92vw;
+    animation: panel-in 0.2s ease-out;
+  }
+
+  @keyframes panel-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px) scale(0.98);
+    }
+  }
+
+  /* ── Provider strip ── */
+  .provider-strip {
+    display: flex;
+    gap: 1px;
+    background: var(--border-default);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    margin-bottom: 12px;
+  }
+
+  .provider-pill {
+    flex: 1;
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 1000;
+    gap: 7px;
+    height: 34px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+    background: var(--bg-surface);
+    transition: color 0.12s, background 0.12s;
   }
 
-  .modal {
-    background: var(--bg-primary);
-    border: 1px solid var(--border-primary);
-    border-radius: 8px;
-    padding: 1.5rem;
-    max-width: 28rem;
-    width: 90%;
+  .provider-pill:hover:not(:disabled) {
+    background: var(--bg-surface-hover);
+    color: var(--text-secondary);
   }
 
-  h3 {
-    margin: 0 0 0.5rem;
-    font-size: 1rem;
+  .provider-pill.selected {
+    color: var(--text-primary);
+    font-weight: 600;
   }
 
-  .provider-select {
+  .pdot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    opacity: 0.35;
+    transition: opacity 0.15s;
+  }
+
+  .provider-pill.selected .pdot {
+    opacity: 1;
+  }
+
+  .pdot.claude {
+    background: var(--accent-coral);
+  }
+
+  .pdot.chatgpt {
+    background: var(--accent-green);
+  }
+
+  /* ── Hint ── */
+  .hint {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+    line-height: 1.5;
+  }
+
+  .hint code {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: var(--bg-inset);
+    padding: 1px 5px;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+  }
+
+  /* ── Drop zone (shared) ── */
+  .zone {
     display: flex;
-    gap: 1rem;
-    margin-bottom: 1rem;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border-radius: var(--radius-lg);
+    margin-bottom: 12px;
+    transition:
+      border-color 0.15s,
+      background 0.15s,
+      box-shadow 0.15s;
   }
 
-  .provider-select label {
+  /* Empty: dashed border, invites interaction */
+  .zone-empty {
+    min-height: 140px;
+    padding: 24px;
+    border: 2px dashed var(--border-default);
+    cursor: pointer;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.03);
+  }
+
+  .zone-empty:hover {
+    border-color: var(--text-muted);
+    background: var(--bg-surface-hover);
+  }
+
+  .zone-empty:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 2px;
+  }
+
+  .zone-empty.drag-over {
+    border-color: var(--accent-blue);
+    border-style: solid;
+    background: color-mix(
+      in srgb,
+      var(--accent-blue) 6%,
+      transparent
+    );
+    box-shadow: 0 0 0 3px
+      color-mix(
+        in srgb,
+        var(--accent-blue) 12%,
+        transparent
+      );
+  }
+
+  .zone-empty.drag-over .upload-icon {
+    color: var(--accent-blue);
+    animation: icon-lift 0.35s ease-out;
+  }
+
+  @keyframes icon-lift {
+    0% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-3px);
+    }
+    100% {
+      transform: translateY(0);
+    }
+  }
+
+  .upload-icon {
+    color: var(--text-muted);
+    margin-bottom: 2px;
+    transition: color 0.15s;
+  }
+
+  .drop-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+  }
+
+  .drop-sub {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  /* File selected */
+  .zone-file {
+    border: 1px solid var(--border-default);
+    background: var(--bg-inset);
+    padding: 12px 16px;
+  }
+
+  .file-row {
     display: flex;
     align-items: center;
-    gap: 0.3rem;
-    font-size: 0.85rem;
-    cursor: pointer;
-  }
-
-  .instructions {
-    color: var(--text-secondary);
-    font-size: 0.85rem;
-    margin: 0 0 1rem;
-  }
-
-  code {
-    background: var(--bg-secondary);
-    padding: 0.1em 0.3em;
-    border-radius: 3px;
-    font-size: 0.85em;
-  }
-
-  input[type="file"] {
+    gap: 10px;
     width: 100%;
-    margin-bottom: 1rem;
   }
 
-  .error {
-    color: var(--accent-red, #e53e3e);
-    font-size: 0.85rem;
-    margin: 0 0 1rem;
+  .file-icon {
+    color: var(--text-muted);
+    flex-shrink: 0;
   }
 
-  .success {
-    color: var(--accent-green, #38a169);
-    font-size: 0.85rem;
-    margin: 0 0 1rem;
-  }
-
-  .actions {
+  .file-meta {
+    flex: 1;
+    min-width: 0;
     display: flex;
-    gap: 0.5rem;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  .file-name {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .file-size {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .file-clear {
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    flex-shrink: 0;
+    transition: background 0.08s, color 0.08s;
+  }
+
+  .file-clear:hover {
+    background: var(--bg-surface-hover);
+    color: var(--text-primary);
+  }
+
+  /* Importing state */
+  .zone-importing {
+    min-height: 140px;
+    padding: 24px;
+    border: 1px solid var(--border-muted);
+    background: var(--bg-inset);
+  }
+
+  .importing-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+
+  /* ── Error ── */
+  .import-error {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 12px;
+    border: 1px solid var(--accent-red);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    color: var(--accent-red);
+    margin-bottom: 12px;
+    word-break: break-word;
+  }
+
+  .import-error svg {
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  /* ── Actions ── */
+  .import-actions {
+    display: flex;
+    gap: 8px;
     justify-content: flex-end;
   }
 
-  button {
-    padding: 0.4rem 1rem;
-    border: 1px solid var(--border-primary);
-    border-radius: 4px;
-    background: var(--bg-secondary);
+  /* ── Result view ── */
+  .result-view {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0 4px;
+  }
+
+  .result-check {
+    margin-bottom: 2px;
+    animation: check-pop 0.35s ease-out;
+  }
+
+  @keyframes check-pop {
+    0% {
+      opacity: 0;
+      transform: scale(0.6);
+    }
+    60% {
+      transform: scale(1.08);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  .result-heading {
+    font-size: 14px;
+    font-weight: 600;
     color: var(--text-primary);
-    cursor: pointer;
-    font-size: 0.85rem;
   }
 
-  button.primary {
-    background: var(--accent-blue);
-    color: white;
-    border-color: var(--accent-blue);
+  .result-stats {
+    display: flex;
+    gap: 12px;
+    margin: 8px 0 4px;
   }
 
-  button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
+  .stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    min-width: 56px;
+    padding: 8px 14px;
+    background: var(--bg-inset);
+    border-radius: var(--radius-md);
+    animation: stat-up 0.3s ease-out backwards;
+  }
+
+  .stat:nth-child(1) {
+    animation-delay: 0.05s;
+  }
+
+  .stat:nth-child(2) {
+    animation-delay: 0.12s;
+  }
+
+  .stat:nth-child(3) {
+    animation-delay: 0.19s;
+  }
+
+  .stat:nth-child(4) {
+    animation-delay: 0.26s;
+  }
+
+  @keyframes stat-up {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+  }
+
+  .stat-num {
+    font-size: 18px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .stat-num.new {
+    color: var(--accent-green);
+  }
+
+  .stat-num.updated {
+    color: var(--accent-blue);
+  }
+
+  .stat-num.skipped {
+    color: var(--accent-amber);
+  }
+
+  .stat-num.errors {
+    color: var(--accent-red);
+  }
+
+  .stat-lbl {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .result-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
   }
 </style>
