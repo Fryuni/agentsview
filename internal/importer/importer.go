@@ -80,16 +80,17 @@ func (f *lazyFTS) suspend() {
 	f.dropped = true
 }
 
-func (f *lazyFTS) restore() {
+func (f *lazyFTS) restore() error {
 	if f == nil || !f.dropped {
-		return
+		return nil
 	}
 	if f.onIndexing != nil {
 		f.onIndexing()
 	}
 	if err := f.sus.RebuildFTS(); err != nil {
-		log.Printf("import: rebuild FTS: %v", err)
+		return fmt.Errorf("rebuilding FTS index: %w", err)
 	}
+	return nil
 }
 
 // ImportClaudeAI reads a Claude.ai conversations.json export
@@ -102,11 +103,13 @@ func ImportClaudeAI(
 	store db.Store,
 	r io.Reader,
 	cb *ImportCallbacks,
-) (ImportStats, error) {
+) (stats ImportStats, retErr error) {
 	fts := newLazyFTS(store, cb.indexing)
-	defer fts.restore()
-
-	var stats ImportStats
+	defer func() {
+		if err := fts.restore(); err != nil && retErr == nil {
+			retErr = err
+		}
+	}()
 
 	err := parser.ParseClaudeAIExport(r, func(
 		result parser.ParseResult,
@@ -140,7 +143,8 @@ func ImportClaudeAI(
 		return nil
 	})
 
-	return stats, err
+	retErr = err
+	return
 }
 
 type importStatus int
@@ -197,9 +201,14 @@ func upsertConversation(
 	}
 
 	// Skip expensive message replacement when the conversation
-	// has not changed since the last import.
+	// has not changed since the last import. Compare both
+	// message count and ended_at (source updated_at) to detect
+	// content/metadata changes even when count is unchanged.
 	if !isNew && existing.MessageCount == s.MessageCount {
-		return importSkipped, nil
+		newEnd := timeStr(s.EndedAt)
+		if ptrEqual(existing.EndedAt, newEnd) {
+			return importSkipped, nil
+		}
 	}
 
 	// Suspend FTS before first message-changing operation to
@@ -257,11 +266,13 @@ func ImportChatGPT(
 	dir string,
 	assetsDir string,
 	cb *ImportCallbacks,
-) (ImportStats, error) {
+) (stats ImportStats, retErr error) {
 	fts := newLazyFTS(store, cb.indexing)
-	defer fts.restore()
-
-	var stats ImportStats
+	defer func() {
+		if err := fts.restore(); err != nil && retErr == nil {
+			retErr = err
+		}
+	}()
 
 	index := BuildAssetIndex(dir)
 	resolver := &assetResolverAdapter{
@@ -357,7 +368,18 @@ func ImportChatGPT(
 		},
 	)
 
-	return stats, err
+	retErr = err
+	return
+}
+
+func ptrEqual(a, b *string) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
 }
 
 func strPtr(s string) *string {
