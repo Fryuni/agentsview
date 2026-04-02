@@ -304,8 +304,6 @@ func ImportChatGPT(
 				return nil
 			}
 
-			fts.suspend()
-
 			sess := db.Session{
 				ID:               s.ID,
 				Project:          s.Project,
@@ -332,6 +330,8 @@ func ImportChatGPT(
 				cb.progress(stats)
 				return nil
 			}
+
+			fts.suspend()
 
 			msgs := make([]db.Message, len(result.Messages))
 			for i, m := range result.Messages {
