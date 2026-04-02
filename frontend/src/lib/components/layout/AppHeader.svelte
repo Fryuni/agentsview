@@ -425,15 +425,16 @@
     </button>
 
     <button
-      class="header-btn"
+      class="import-btn"
       onclick={() => showImportModal = true}
       title="Import conversations"
       aria-label="Import conversations"
     >
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
         <path d="M2.75 14A1.75 1.75 0 011 12.25v-2.5a.75.75 0 011.5 0v2.5c0 .138.112.25.25.25h10.5a.25.25 0 00.25-.25v-2.5a.75.75 0 011.5 0v2.5A1.75 1.75 0 0113.25 14H2.75z"/>
         <path d="M11.78 4.72a.75.75 0 00-1.06 0L8.75 6.69V1.5a.75.75 0 00-1.5 0v5.19L5.28 4.72a.75.75 0 00-1.06 1.06l3.25 3.25a.75.75 0 001.06 0l3.25-3.25a.75.75 0 000-1.06z"/>
       </svg>
+      <span class="import-label">Import</span>
     </button>
 
     <span class="header-divider"></span>
@@ -820,6 +821,26 @@
     animation: spin 1s linear infinite;
   }
 
+  /* ── Import button (icon + label) ── */
+  .import-btn {
+    height: 26px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 10px;
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    white-space: nowrap;
+    transition: background 0.12s, color 0.12s;
+  }
+
+  .import-btn:hover {
+    background: var(--bg-surface-hover);
+    color: var(--text-primary);
+  }
+
   .header-divider {
     width: 1px;
     height: 14px;
@@ -898,7 +919,8 @@
 
   /* 1024px: Hide nav button labels + search text/kbd */
   @media (max-width: 1023px) {
-    .nav-label {
+    .nav-label,
+    .import-label {
       display: none;
     }
 
@@ -980,7 +1002,8 @@
   @media (pointer: coarse) {
     .header-btn,
     .nav-btn,
-    .hamburger {
+    .hamburger,
+    .import-btn {
       min-width: 44px;
       min-height: 44px;
     }
