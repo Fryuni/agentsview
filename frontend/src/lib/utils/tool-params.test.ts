@@ -266,7 +266,7 @@ describe("generateFallbackContent", () => {
       new_string: "const x = 2;",
     });
     expect(result).toBe(
-      "--- old\nconst x = 1;\n+++ new\nconst x = 2;",
+      "@@ -1,1 +1,1 @@\n-const x = 1;\n+const x = 2;",
     );
   });
 
@@ -277,7 +277,7 @@ describe("generateFallbackContent", () => {
       new_str: "const x = 2;",
     });
     expect(result).toBe(
-      "--- old\nconst x = 1;\n+++ new\nconst x = 2;",
+      "@@ -1,1 +1,1 @@\n-const x = 1;\n+const x = 2;",
     );
   });
 
@@ -288,7 +288,7 @@ describe("generateFallbackContent", () => {
       new_string: "const x = 1;",
     });
     expect(result).toBe(
-      "--- old\n\n+++ new\nconst x = 1;",
+      "@@ -1,1 +1,1 @@\n-\n+const x = 1;",
     );
   });
 
@@ -299,7 +299,7 @@ describe("generateFallbackContent", () => {
       newString: ".foo { color: blue; }",
     });
     expect(result).toBe(
-      "--- old\n.foo { color: red; }\n+++ new\n.foo { color: blue; }",
+      "@@ -1,1 +1,1 @@\n-.foo { color: red; }\n+.foo { color: blue; }",
     );
   });
 
@@ -447,32 +447,35 @@ describe("generateFallbackContent", () => {
     ).toBeNull();
   });
 
-  it("truncates long Edit strings", () => {
+  it("shows full Edit strings without truncation", () => {
     const long = "x".repeat(600);
     const result = generateFallbackContent("Edit", {
       old_string: long,
       new_string: "short",
     })!;
+    // -prefix + full 600 chars
     const oldLine = result.split("\n")[1]!;
-    expect(oldLine.length).toBeLessThanOrEqual(501);
-    expect(oldLine).toContain("\u2026");
+    expect(oldLine).toBe("-" + long);
   });
 
-  it("shows Write content preview", () => {
+  it("shows Write content as all-additions diff", () => {
     const result = generateFallbackContent("Write", {
       file_path: "/src/new.ts",
       content: 'export const x = "hello";',
     });
-    expect(result).toBe('export const x = "hello";');
+    expect(result).toBe(
+      '@@ -0,0 +1,1 @@\n+export const x = "hello";',
+    );
   });
 
-  it("truncates long Write content", () => {
+  it("shows full Write content without truncation", () => {
     const long = "line\n".repeat(200);
     const result = generateFallbackContent("Write", {
       file_path: "/src/big.ts",
       content: long,
     })!;
-    expect(result.length).toBeLessThanOrEqual(501);
+    expect(result).toContain("+line");
+    expect(result.split("\n").length).toBe(202); // hunk + 200 lines + trailing empty
   });
 
   it("shows empty-file marker for Write with empty content", () => {

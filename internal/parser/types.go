@@ -25,6 +25,8 @@ const (
 	AgentKimi          AgentType = "kimi"
 	AgentClaudeAI      AgentType = "claude-ai"
 	AgentChatGPT       AgentType = "chatgpt"
+	AgentKiro          AgentType = "kiro"
+	AgentKiroIDE       AgentType = "kiro-ide"
 )
 
 // AgentDef describes a supported coding agent's filesystem
@@ -220,6 +222,28 @@ var Registry = []AgentDef{
 		DisplayName: "ChatGPT",
 		IDPrefix:    "chatgpt:",
 		FileBased:   false,
+	},
+	{
+		Type:           AgentKiro,
+		DisplayName:    "Kiro",
+		EnvVar:         "KIRO_SESSIONS_DIR",
+		ConfigKey:      "kiro_dirs",
+		DefaultDirs:    []string{".kiro/sessions/cli"},
+		IDPrefix:       "kiro:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverKiroSessions,
+		FindSourceFunc: FindKiroSourceFile,
+	},
+	{
+		Type:           AgentKiroIDE,
+		DisplayName:    "Kiro IDE",
+		EnvVar:         "KIRO_IDE_DIR",
+		ConfigKey:      "kiro_ide_dirs",
+		DefaultDirs:    kiroIDEDefaultDirs(),
+		IDPrefix:       "kiro-ide:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverKiroIDESessions,
+		FindSourceFunc: FindKiroIDESourceFile,
 	},
 }
 

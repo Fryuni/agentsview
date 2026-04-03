@@ -22,6 +22,10 @@ describe("KNOWN_AGENTS", () => {
       "openclaw",
       "iflow",
       "kimi",
+      "claude-ai",
+      "chatgpt",
+      "kiro",
+      "kiro-ide",
     ]);
   });
 

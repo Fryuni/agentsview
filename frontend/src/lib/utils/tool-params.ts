@@ -11,6 +11,9 @@ export function truncate(s: string, max: number): string {
 
 type Params = Record<string, unknown>;
 
+/** Max diff lines rendered in fallback content to avoid DOM bloat. */
+const MAX_DIFF_LINES = 200;
+
 /** Extract metadata tags for common tool types.
  *  Dispatches on normalized category so all agents (Claude,
  *  Gemini, Codex, etc.) render consistently.
@@ -47,7 +50,7 @@ export function extractToolParamMeta(
         value: String(params.pages),
       });
   } else if (cat === "Edit") {
-    const filePath = params.file_path ?? params.path ?? params.filePath;
+    const filePath = params.file_path ?? params.path ?? params.filePath ?? params.file;
     if (filePath)
       meta.push({
         label: "file",
@@ -56,7 +59,7 @@ export function extractToolParamMeta(
     if (params.replace_all)
       meta.push({ label: "mode", value: "replace_all" });
   } else if (cat === "Write") {
-    const filePath = params.file_path ?? params.path;
+    const filePath = params.file_path ?? params.path ?? params.file;
     if (filePath)
       meta.push({
         label: "file",
@@ -128,20 +131,38 @@ export function generateFallbackContent(
   params: Params,
 ): string | null {
   if (toolName === "Task" || toolName === "Agent") return null;
-  if (toolName === "Edit") {
+  const isEdit =
+    toolName === "Edit" ||
+    params.command === "strReplace";
+  if (isEdit) {
     const lines: string[] = [];
     // Claude Code: old_string/new_string; OpenCode: oldString/newString (camelCase)
     const oldStr =
-      params.old_string ?? params.old_str ?? params.oldString;
+      params.old_string ?? params.old_str ?? params.oldString ?? params.oldStr;
     const newStr =
-      params.new_string ?? params.new_str ?? params.newString;
-    if (oldStr != null) {
-      lines.push("--- old");
-      lines.push(truncate(String(oldStr), 500));
+      params.new_string ?? params.new_str ?? params.newString ?? params.newStr;
+    // Kiro IDE: pre-computed unified diff from Go parser
+    const diffText = params.diff;
+    if (!lines.length && typeof diffText === "string" && diffText) {
+      const diffLines = diffText.split("\n");
+      if (diffLines.length > MAX_DIFF_LINES) {
+        return diffLines.slice(0, MAX_DIFF_LINES).join("\n")
+          + `\n... (${diffLines.length} lines total)`;
+      }
+      return diffText;
     }
-    if (newStr != null) {
-      lines.push("+++ new");
-      lines.push(truncate(String(newStr), 500));
+    if (oldStr != null || newStr != null) {
+      const oldText = String(oldStr ?? "");
+      const newText = String(newStr ?? "");
+      const oldLines = oldText.split("\n");
+      const newLines = newText.split("\n");
+      lines.push(`@@ -1,${oldLines.length} +1,${newLines.length} @@`);
+      for (const l of oldLines) lines.push(`-${l}`);
+      for (const l of newLines) lines.push(`+${l}`);
+      if (lines.length > MAX_DIFF_LINES) {
+        lines.length = MAX_DIFF_LINES;
+        lines.push(`... (${oldLines.length + newLines.length} lines total)`);
+      }
     }
     // Pi: edits[] array with set_line, replace_lines, insert_after, or op-based operations
     if (!lines.length && Array.isArray(params.edits)) {
@@ -190,9 +211,21 @@ export function generateFallbackContent(
     }
     return lines.length ? lines.join("\n") : null;
   }
-  if (toolName === "Write" && params.content != null) {
-    const text = String(params.content);
-    return text ? truncate(text, 500) : "(empty file)";
+  if (
+    toolName === "Write" ||
+    (toolName === "write" && params.command === "create")
+  ) {
+    if (params.content != null) {
+      const text = String(params.content);
+      if (!text) return "(empty file)";
+      const allLines = text.split("\n");
+      const capped = allLines.length > MAX_DIFF_LINES;
+      const show = capped ? allLines.slice(0, MAX_DIFF_LINES) : allLines;
+      const header = `@@ -0,0 +1,${allLines.length} @@\n`;
+      const body = show.map(l => `+${l}`).join("\n");
+      const suffix = capped ? `\n... (${allLines.length} lines total)` : "";
+      return header + body + suffix;
+    }
   }
   const lines: string[] = [];
   for (const [key, value] of Object.entries(params)) {

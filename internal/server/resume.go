@@ -115,7 +115,12 @@ func (s *Server) handleResumeSession(
 	rawID := strings.TrimPrefix(id, prefix)
 
 	// Build the CLI command.
-	cmd := fmt.Sprintf(tmpl, shellQuote(rawID))
+	var cmd string
+	if strings.Contains(tmpl, "%s") {
+		cmd = fmt.Sprintf(tmpl, shellQuote(rawID))
+	} else {
+		cmd = tmpl
+	}
 	if string(session.Agent) == "claude" {
 		if req.SkipPermissions {
 			cmd += " --dangerously-skip-permissions"
@@ -129,11 +134,11 @@ func (s *Server) handleResumeSession(
 	// project field for use in cd prefix and response metadata.
 	sessionDir := resolveSessionDir(session)
 
-	// Claude Code scopes sessions by the working directory the
-	// session was started from. Prepend cd <cwd> so the resume
-	// works from any terminal location. Only Claude uses this
-	// pattern — other agents handle directory scoping internally.
-	if string(session.Agent) == "claude" && sessionDir != "" {
+	// Claude Code and Kiro CLI scope sessions by the working
+	// directory the session was started from. Prepend cd <cwd> so
+	// the resume works from any terminal location.
+	agent := string(session.Agent)
+	if (agent == "claude" || agent == "kiro") && sessionDir != "" {
 		cmd = fmt.Sprintf("cd %s && %s", shellQuote(sessionDir), cmd)
 	}
 
@@ -386,8 +391,23 @@ func detectTerminalDarwin(
 		iterm := "/Applications/iTerm.app"
 		if _, err := os.Stat(iterm); err == nil {
 			appleScript := fmt.Sprintf(
-				`tell application "iTerm"
-					create window with default profile command "%s"
+				`tell application "System Events"
+					set isRunning to (exists (processes whose name is "iTerm2"))
+				end tell
+				tell application "iTerm"
+					activate
+					if isRunning and (count of windows) > 0 then
+						tell current window
+							create tab with default profile
+						end tell
+					else
+						create window with default profile
+					end if
+					tell current window
+						tell current session
+							write text "%s"
+						end tell
+					end tell
 				end tell`,
 				safe,
 			)
@@ -477,6 +497,17 @@ func (s *Server) handleSetTerminalConfig(
 // directory in early conversation entries; some agents (e.g. Codex)
 // store it under payload.cwd. Returns "" if not found.
 func readSessionCwd(path string) string {
+	// Kiro CLI stores cwd in a companion .json metadata file
+	// alongside the .jsonl session file.
+	if before, ok := strings.CutSuffix(path, ".jsonl"); ok {
+		metaPath := before + ".json"
+		if data, err := os.ReadFile(metaPath); err == nil {
+			if cwd := gjson.GetBytes(data, "cwd").Str; cwd != "" {
+				return cwd
+			}
+		}
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return ""
@@ -643,8 +674,23 @@ func launchResumeDarwin(
 	switch o.ID {
 	case "iterm2":
 		script := fmt.Sprintf(
-			`tell application "iTerm"
-				create window with default profile command "%s"
+			`tell application "System Events"
+				set isRunning to (exists (processes whose name is "iTerm2"))
+			end tell
+			tell application "iTerm"
+				activate
+				if isRunning and (count of windows) > 0 then
+					tell current window
+						create tab with default profile
+					end tell
+				else
+					create window with default profile
+				end if
+				tell current window
+					tell current session
+						write text "%s"
+					end tell
+				end tell
 			end tell`, safe,
 		)
 		return exec.Command("osascript", "-e", script)

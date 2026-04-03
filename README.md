@@ -1,7 +1,7 @@
 # agentsview
 
 A local-first desktop and web application for browsing, searching, and analyzing
-AI agent coding sessions. Supports Claude Code, Codex, OpenCode, and 9 other
+AI agent coding sessions. Supports Claude Code, Codex, OpenCode, and 11 other
 agents.
 
 <p align="center">
@@ -51,7 +51,7 @@ behavior, and track usage patterns over time.
 - **Full-text search** across all message content, instantly
 - **Analytics dashboard** with activity heatmaps, tool usage, velocity metrics,
   and project breakdowns
-- **Multi-agent support** for Claude Code, Codex, OpenCode, and 9 other agents
+- **Multi-agent support** for Claude Code, Codex, OpenCode, and 11 other agents
   ([full list](#supported-agents))
 - **Live updates** via SSE as active sessions receive new messages
 - **Keyboard-first** navigation (vim-style `j`/`k`/`[`/`]`)
@@ -352,6 +352,8 @@ frontend/           Svelte 5 SPA (Vite, TypeScript)
 | Pi             | `~/.pi/agent/sessions/`                            | `PI_DIR`              |
 | OpenClaw       | `~/.openclaw/agents/`                              | `OPENCLAW_DIR`        |
 | Kimi           | `~/.kimi/sessions/`                                | `KIMI_DIR`            |
+| Kiro CLI       | `~/.kiro/sessions/cli/`                            | `KIRO_SESSIONS_DIR`   |
+| Kiro IDE       | `~/Library/Application Support/Kiro/` (macOS)      | `KIRO_IDE_DIR`        |
 
 ## Acknowledgements
 

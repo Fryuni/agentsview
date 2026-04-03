@@ -251,9 +251,9 @@ describe("ToolBlock fallback content", () => {
     document.querySelector<HTMLButtonElement>(".tool-header")!.click();
     await tick();
 
-    const toolContent = document.querySelector(".tool-content");
-    expect(toolContent).not.toBeNull();
-    expect(toolContent!.textContent).toContain("Hello World");
+    const diffView = document.querySelector(".diff-view");
+    expect(diffView).not.toBeNull();
+    expect(diffView!.textContent).toContain("Hello World");
   });
 
   it("falls back to tool_name when category has no specific pattern", async () => {

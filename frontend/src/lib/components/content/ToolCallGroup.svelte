@@ -6,6 +6,7 @@
   } from "../../utils/content-parser.js";
   import { formatTimestamp } from "../../utils/format.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
+  import { formatMessageForCopy } from "../../utils/copy-message.js";
   import ToolBlock from "./ToolBlock.svelte";
 
   interface Props {
@@ -47,7 +48,7 @@
   let copyTimer: ReturnType<typeof setTimeout>;
 
   async function handleCopy() {
-    const combined = messages.map((m) => m.content).join("\n\n");
+    const combined = messages.map((m) => formatMessageForCopy(m)).join("\n\n");
     const ok = await copyToClipboard(combined);
     if (ok) {
       clearTimeout(copyTimer);

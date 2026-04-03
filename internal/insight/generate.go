@@ -33,6 +33,11 @@ var ValidAgents = map[string]bool{
 	"codex":   true,
 	"copilot": true,
 	"gemini":  true,
+	// Kiro CLI lacks a hard no-tools/read-only mode, so it
+	// is not safe for insight generation (prompt injection
+	// risk). Re-enable when kiro-cli supports --tools="" or
+	// an equivalent sandbox flag.
+	// "kiro": true,
 }
 
 // GenerateFunc is the signature for insight generation,
@@ -78,7 +83,7 @@ func GenerateStream(
 		)
 	}
 
-	path, err := exec.LookPath(agent)
+	path, err := exec.LookPath(agentBinary(agent))
 	if err != nil {
 		return Result{}, fmt.Errorf(
 			"%s CLI not found: %w", agent, err,
@@ -632,3 +637,14 @@ func parseStreamJSON(
 	}
 	return "", nil
 }
+
+// agentBinary maps an agent name to its CLI binary name.
+func agentBinary(agent string) string {
+	if agent == "kiro" {
+		return "kiro-cli"
+	}
+	return agent
+}
+
+// generateKiro is disabled until kiro-cli supports a hard
+// no-tools/read-only mode. See ValidAgents comment above.

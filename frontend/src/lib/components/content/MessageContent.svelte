@@ -9,6 +9,7 @@
     formatTokenUsage,
   } from "../../utils/format.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
+  import { formatMessageForCopy } from "../../utils/copy-message.js";
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import ToolBlock from "./ToolBlock.svelte";
@@ -162,7 +163,7 @@
   let pinTimer: ReturnType<typeof setTimeout>;
 
   async function handleCopy() {
-    const ok = await copyToClipboard(message.content);
+    const ok = await copyToClipboard(formatMessageForCopy(message));
     if (ok) {
       clearTimeout(copyTimer);
       copied = true;

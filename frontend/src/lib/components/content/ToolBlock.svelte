@@ -205,6 +205,16 @@
   let subagentSessionId = $derived(
     isTask ? toolCall?.subagent_session_id ?? null : null,
   );
+  let isDiff = $derived.by(() => {
+    const text = fallbackContent ?? content ?? "";
+    return text.startsWith("--- a/") || text.startsWith("@@");
+  });
+
+  let diffLines = $derived.by(() => {
+    if (!isDiff) return [];
+    const raw = fallbackContent ?? content ?? "";
+    return raw.split("\n");
+  });
 </script>
 
 <div class="tool-block">
@@ -242,6 +252,12 @@
       <pre class="tool-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: taskPrompt }}>{@html escapeHTML(taskPrompt)}</pre>
     {:else if content}
       <pre class="tool-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content }}>{@html escapeHTML(content)}</pre>
+    {:else if fallbackContent && isDiff}
+      <div class="diff-view">
+        {#each diffLines as line}
+          <div class="diff-line {line.startsWith('@@') ? 'diff-hunk' : line.startsWith('+') ? 'diff-add' : line.startsWith('-') ? 'diff-del' : 'diff-ctx'}">{line}</div>
+        {/each}
+      </div>
     {:else if fallbackContent}
       <pre class="tool-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: fallbackContent }}>{@html escapeHTML(fallbackContent)}</pre>
     {/if}
@@ -482,5 +498,42 @@
   .history-content {
     border-top: 0;
     margin-top: 0;
+  }
+
+  .diff-view {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.5;
+    overflow-x: auto;
+    border-top: 1px solid var(--border-muted);
+    padding: 4px 0;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  .diff-line {
+    padding: 0 14px;
+    white-space: pre;
+  }
+
+  .diff-hunk {
+    color: var(--accent-blue, #58a6ff);
+    background: color-mix(in srgb, var(--accent-blue, #58a6ff) 8%, transparent);
+    padding: 2px 14px;
+    margin: 2px 0;
+  }
+
+  .diff-add {
+    color: var(--accent-green, #3fb950);
+    background: color-mix(in srgb, var(--accent-green, #3fb950) 10%, transparent);
+  }
+
+  .diff-del {
+    color: var(--accent-red, #f85149);
+    background: color-mix(in srgb, var(--accent-red, #f85149) 10%, transparent);
+  }
+
+  .diff-ctx {
+    color: var(--text-muted);
   }
 </style>
