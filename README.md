@@ -69,9 +69,10 @@ or diagnostics are collected or sent anywhere.
 - The optional PostgreSQL sync is explicit and user-initiated (`pg push`),
   connecting only to a server you configure
 
-The only automatic outbound request is an update check on startup that fetches
-release metadata from GitHub. This sends no analytics or session data. The
-desktop app and the web UI both perform this check. To disable it:
+The only automatic outbound requests are update checks on startup. The CLI/web
+UI fetches release metadata from the GitHub API, while the desktop app uses its
+own native updater to check for new releases. Neither check sends analytics or
+session data. To disable:
 
 - **Desktop app**: set `AGENTSVIEW_DESKTOP_AUTOUPDATE=0`
 - **CLI/web UI**: set `AGENTSVIEW_DISABLE_UPDATE_CHECK=1`, pass
@@ -296,13 +297,15 @@ Install both, then run `make install-hooks` after cloning:
 # macOS
 brew install prek uv
 
-# Linux (or any platform)
+# Linux (or any platform; requires Go on PATH)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 go install github.com/j178/prek/cmd/prek@latest
+# ensure ~/.local/bin and ~/go/bin are on PATH
 ```
 
-The hooks run `make lint` and `mdformat` on every commit, auto-fixing formatting
-issues. If a hook rewrites files, re-stage and re-commit.
+The hooks run `make lint` on every commit and `mdformat` when Markdown files are
+staged, auto-fixing formatting issues. If a hook rewrites files, re-stage and
+re-commit.
 
 ## Desktop Development
 
