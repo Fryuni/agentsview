@@ -44,7 +44,7 @@ func TestEnsureSchemaIdempotent(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		nil, nil,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -173,7 +173,7 @@ func TestPushSingleSession(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		nil, nil,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -273,7 +273,7 @@ func TestPushIdempotent(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		nil, nil,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -330,7 +330,7 @@ func TestPushWithToolCalls(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		nil, nil,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -417,7 +417,7 @@ func TestPushWithToolResultEvents(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		nil, nil,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -497,7 +497,7 @@ func TestStatus(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		nil, nil,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -536,7 +536,7 @@ func TestStatusMissingSchema(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		nil, nil,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -573,7 +573,7 @@ func TestNewRejectsMachineLocal(t *testing.T) {
 	local := testDB(t)
 	_, err := New(
 		pgURL, "agentsview", local, "local", true,
-		nil, nil,
+		SyncOptions{},
 	)
 	if err == nil {
 		t.Fatal("expected error for machine=local")
@@ -585,7 +585,7 @@ func TestNewRejectsEmptyMachine(t *testing.T) {
 	local := testDB(t)
 	_, err := New(
 		pgURL, "agentsview", local, "", true,
-		nil, nil,
+		SyncOptions{},
 	)
 	if err == nil {
 		t.Fatal("expected error for empty machine")
@@ -596,7 +596,7 @@ func TestNewRejectsEmptyURL(t *testing.T) {
 	local := testDB(t)
 	_, err := New(
 		"", "agentsview", local, "test", true,
-		nil, nil,
+		SyncOptions{},
 	)
 	if err == nil {
 		t.Fatal("expected error for empty URL")
@@ -612,7 +612,7 @@ func TestPushUpdatedAtFormat(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		nil, nil,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -674,7 +674,7 @@ func TestPushBumpsUpdatedAtOnMessageRewrite(
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"machine-a", true,
-		nil, nil,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -763,7 +763,7 @@ func TestPushFullBypassesHeuristic(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		nil, nil,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -835,7 +835,7 @@ func TestPushDetectsSchemaReset(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		nil, nil,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -918,7 +918,7 @@ func TestPushFullAfterSchemaDropRecreatesSchema(
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		nil, nil,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -973,7 +973,7 @@ func TestPushBatchesMultipleSessions(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		nil, nil,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -1076,7 +1076,7 @@ func TestPushBulkInsertManyMessages(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		nil, nil,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -1196,7 +1196,7 @@ func TestPushSimplePK(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		nil, nil,
+		SyncOptions{},
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)

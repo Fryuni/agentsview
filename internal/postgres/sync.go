@@ -41,6 +41,16 @@ type Sync struct {
 	schemaDone bool
 }
 
+// SyncOptions holds optional configuration for a Sync instance.
+type SyncOptions struct {
+	// Projects limits push scope to these project names.
+	// Mutually exclusive with ExcludeProjects.
+	Projects []string
+	// ExcludeProjects excludes these project names from push.
+	// Mutually exclusive with Projects.
+	ExcludeProjects []string
+}
+
 // New creates a Sync instance and verifies the PG connection.
 // The machine name must not be "local", which is reserved as the
 // SQLite sentinel for sessions that originated on this machine.
@@ -49,7 +59,7 @@ type Sync struct {
 func New(
 	pgURL, schema string, local *db.DB,
 	machine string, allowInsecure bool,
-	projects, excludeProjects []string,
+	opts SyncOptions,
 ) (*Sync, error) {
 	if pgURL == "" {
 		return nil, fmt.Errorf("postgres URL is required")
@@ -80,8 +90,8 @@ func New(
 		local:           local,
 		machine:         machine,
 		schema:          schema,
-		projects:        projects,
-		excludeProjects: excludeProjects,
+		projects:        opts.Projects,
+		excludeProjects: opts.ExcludeProjects,
 	}, nil
 }
 

@@ -108,7 +108,7 @@ func TestPushTokenUsageToPostgres(t *testing.T) {
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	local := testDB(t)
-	ps, err := New(pgURL, "agentsview", local, "test-machine", true, nil, nil)
+	ps, err := New(pgURL, "agentsview", local, "test-machine", true, SyncOptions{})
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
 	}
