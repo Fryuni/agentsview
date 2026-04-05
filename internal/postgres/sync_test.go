@@ -1494,6 +1494,27 @@ func TestPushFilteredFullIsIncremental(t *testing.T) {
 			r1.SessionsPushed)
 	}
 
+	// Filtered --full must not advance the global watermark.
+	wm, err := local.GetSyncState("last_push_at")
+	if err != nil {
+		t.Fatalf("reading watermark: %v", err)
+	}
+	if wm != "" {
+		t.Errorf("watermark after filtered --full = %q, "+
+			"want empty", wm)
+	}
+
+	// Boundary fingerprints must have been written.
+	bs, err := local.GetSyncState(
+		"last_push_boundary_state",
+	)
+	if err != nil {
+		t.Fatalf("reading boundary state: %v", err)
+	}
+	if bs == "" {
+		t.Fatal("boundary state empty after filtered --full")
+	}
+
 	// Second push (not --full) should be a no-op because
 	// fingerprints were persisted after the filtered --full.
 	r2, err := ps.Push(ctx, false)
