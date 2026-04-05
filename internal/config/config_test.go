@@ -978,3 +978,22 @@ func TestResolvePG_ErrorsOnMissingBareEnvVar(t *testing.T) {
 		t.Errorf("error = %v, want mention of NONEXISTENT_PG_BARE_VAR", err)
 	}
 }
+
+func TestResolvePG_RejectsMutuallyExclusiveFilters(
+	t *testing.T,
+) {
+	cfg := Config{
+		PG: PGConfig{
+			URL:             "postgres://localhost/test",
+			Projects:        []string{"alpha"},
+			ExcludeProjects: []string{"beta"},
+		},
+	}
+	_, err := cfg.ResolvePG()
+	if err == nil {
+		t.Fatal("expected error for mutually exclusive filters")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("error = %v, want mutually exclusive", err)
+	}
+}
