@@ -418,6 +418,116 @@ func TestGetDailyUsageTruncatedTokenJSON(t *testing.T) {
 	}
 }
 
+func TestGetDailyUsage_DedupesByClaudeMessageAndRequestID(t *testing.T) {
+	d := testDB(t)
+	if err := d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:         "claude-opus-4-6",
+		InputPerMTok:         15.0,
+		OutputPerMTok:        75.0,
+		CacheCreationPerMTok: 18.75,
+		CacheReadPerMTok:     1.50,
+	}}); err != nil {
+		t.Fatalf("seed pricing: %v", err)
+	}
+
+	mustExec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := d.getWriter().Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`INSERT INTO sessions (id, project, machine, agent, started_at, ended_at)
+	          VALUES (?, ?, 'local', 'claude', ?, ?)`,
+		"s-main", "proj", "2026-04-10T10:00:00Z", "2026-04-10T10:05:00Z")
+	mustExec(`INSERT INTO sessions (id, project, machine, agent, started_at, ended_at, parent_session_id, relationship_type)
+	          VALUES (?, ?, 'local', 'claude', ?, ?, 's-main', 'fork')`,
+		"s-fork", "proj", "2026-04-10T10:01:00Z", "2026-04-10T10:06:00Z")
+
+	shared := `{"input_tokens":100,"output_tokens":500,"cache_creation_input_tokens":1000,"cache_read_input_tokens":50000}`
+	unique := `{"input_tokens":20,"output_tokens":80,"cache_creation_input_tokens":200,"cache_read_input_tokens":5000}`
+
+	for _, row := range []struct {
+		sid, ts, usage, mid, rid string
+		ord                      int
+	}{
+		{"s-main", "2026-04-10T10:02:00Z", shared, "msg_dup", "req_dup", 0},
+		{"s-fork", "2026-04-10T10:02:00Z", shared, "msg_dup", "req_dup", 0},
+		{"s-fork", "2026-04-10T10:03:00Z", unique, "msg_uniq", "req_uniq", 1},
+	} {
+		mustExec(`INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp,
+			 model, token_usage,
+			 claude_message_id, claude_request_id,
+			 has_output_tokens, has_context_tokens)
+			VALUES (?, ?, 'assistant', '', ?, 'claude-opus-4-6', ?, ?, ?, 1, 1)`,
+			row.sid, row.ord, row.ts, row.usage, row.mid, row.rid)
+	}
+
+	result, err := d.GetDailyUsage(context.Background(), UsageFilter{
+		From: "2026-04-10", To: "2026-04-10", Timezone: "UTC",
+	})
+	if err != nil {
+		t.Fatalf("GetDailyUsage: %v", err)
+	}
+	if len(result.Daily) != 1 {
+		t.Fatalf("daily entries = %d, want 1", len(result.Daily))
+	}
+	day := result.Daily[0]
+	if day.InputTokens != 120 {
+		t.Errorf("input = %d, want 120", day.InputTokens)
+	}
+	if day.OutputTokens != 580 {
+		t.Errorf("output = %d, want 580", day.OutputTokens)
+	}
+	if day.CacheCreationTokens != 1200 {
+		t.Errorf("cache_cr = %d, want 1200", day.CacheCreationTokens)
+	}
+	if day.CacheReadTokens != 55000 {
+		t.Errorf("cache_rd = %d, want 55000", day.CacheReadTokens)
+	}
+}
+
+func TestGetDailyUsage_MissingDedupKeysCountedEveryTime(t *testing.T) {
+	d := testDB(t)
+	if err := d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:  "claude-opus-4-6",
+		OutputPerMTok: 75.0,
+	}}); err != nil {
+		t.Fatalf("seed pricing: %v", err)
+	}
+
+	mustExec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := d.getWriter().Exec(q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`INSERT INTO sessions (id, project, machine, agent, started_at, ended_at)
+	          VALUES ('s1', 'proj', 'local', 'claude', ?, ?)`,
+		"2026-04-10T10:00:00Z", "2026-04-10T10:05:00Z")
+
+	usage := `{"input_tokens":0,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}`
+	for _, ord := range []int{0, 1} {
+		mustExec(`INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp,
+			 model, token_usage,
+			 claude_message_id, claude_request_id,
+			 has_output_tokens)
+			VALUES ('s1', ?, 'assistant', '', '2026-04-10T10:02:00Z',
+			        'claude-opus-4-6', ?, '', '', 1)`, ord, usage)
+	}
+
+	result, err := d.GetDailyUsage(context.Background(), UsageFilter{
+		From: "2026-04-10", To: "2026-04-10", Timezone: "UTC",
+	})
+	if err != nil {
+		t.Fatalf("GetDailyUsage: %v", err)
+	}
+	if len(result.Daily) != 1 || result.Daily[0].OutputTokens != 20 {
+		t.Errorf("output = %v, want 20 (both no-key rows counted)", result.Daily)
+	}
+}
+
 func TestGetDailyUsageLongLivedSession(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
