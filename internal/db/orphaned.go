@@ -124,6 +124,7 @@ func (d *DB) CopyOrphanedDataFrom(
 		"model", "token_usage", "context_tokens",
 		"output_tokens", "has_context_tokens",
 		"has_output_tokens",
+		"claude_message_id", "claude_request_id",
 	} {
 		if oldDBHasColumn(ctx, tx, "messages", c) {
 			msgCols += ", " + c
