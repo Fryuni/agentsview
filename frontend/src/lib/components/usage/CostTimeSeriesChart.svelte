@@ -5,6 +5,10 @@
   const CHART_H = 180;
   const X_LABEL_H = 20;
   const Y_LABEL_W = 40;
+  // Reserved headroom at the top of the plot area so the
+  // maximum bar, its grid line, and the top y-axis label's
+  // ascenders do not clip against the SVG viewBox edge.
+  const TOP_PAD = 10;
   const MAX_SERIES = 5;
 
   const OTHER_COLOR = "var(--text-muted)";
@@ -138,6 +142,35 @@
 
   const BAR_WIDTH = 40;
 
+  // niceCeil rounds v up to the next "nice" round number
+  // (1, 2, 2.5, 5, 10 × 10^n) so the y-axis top tick is a
+  // readable value instead of an arbitrary data max. Combined
+  // with TOP_PAD this is what gives the chart its headroom.
+  function niceCeil(v: number): number {
+    if (!Number.isFinite(v) || v <= 0) return 1;
+    const exp = Math.floor(Math.log10(v));
+    const base = Math.pow(10, exp);
+    const normalized = v / base;
+    let nice: number;
+    if (normalized <= 1) nice = 1;
+    else if (normalized <= 2) nice = 2;
+    else if (normalized <= 2.5) nice = 2.5;
+    else if (normalized <= 5) nice = 5;
+    else nice = 10;
+    return nice * base;
+  }
+
+  const niceMax = $derived(niceCeil(seriesData.maxY));
+
+  // scaleY maps a data value in [0, niceMax] onto the plot
+  // area [TOP_PAD, h], inverted so 0 is at the bottom. Kept
+  // as a function so both buildPaths and yTicks use identical
+  // math and the top tick lines up with the highest bar.
+  function scaleY(val: number, max: number, h: number): number {
+    const plotH = h - TOP_PAD;
+    return h - (val / max) * plotH;
+  }
+
   function buildPaths(
     points: Point[],
     keys: string[],
@@ -160,8 +193,8 @@
       let baseline = 0;
       for (const key of keys) {
         const val = points[0]!.values[key] ?? 0;
-        const top = h - ((baseline + val) / maxY) * h;
-        const bot = h - (baseline / maxY) * h;
+        const top = scaleY(baseline + val, maxY, h);
+        const bot = scaleY(baseline, maxY, h);
         const d =
           `M${x0},${bot}` +
           `L${x0},${top}` +
@@ -191,14 +224,14 @@
       for (let i = 0; i < points.length; i++) {
         const x = Y_LABEL_W + i * xStep;
         const val = points[i]!.values[key] ?? 0;
-        const top = h - ((baselines[i]! + val) / maxY) * h;
+        const top = scaleY(baselines[i]! + val, maxY, h);
         d += i === 0 ? `M${x},${top}` : `L${x},${top}`;
       }
 
       // Close area back along baseline
       for (let i = points.length - 1; i >= 0; i--) {
         const x = Y_LABEL_W + i * xStep;
-        const base = h - (baselines[i]! / maxY) * h;
+        const base = scaleY(baselines[i]!, maxY, h);
         d += `L${x},${base}`;
       }
       d += "Z";
@@ -220,7 +253,7 @@
     buildPaths(
       seriesData.points,
       seriesData.keys,
-      seriesData.maxY,
+      niceMax,
       chartWidth,
       CHART_H,
     ),
@@ -267,14 +300,13 @@
   }
 
   const yTicks = $derived.by(() => {
-    const max = seriesData.maxY;
-    if (max <= 0) return [];
+    if (niceMax <= 0) return [];
     const ticks: Array<{ y: number; label: string }> = [];
     const count = 4;
     for (let i = 0; i <= count; i++) {
-      const val = (max / count) * i;
+      const val = (niceMax / count) * i;
       ticks.push({
-        y: CHART_H - (val / max) * CHART_H,
+        y: scaleY(val, niceMax, CHART_H),
         label: fmtYLabel(val),
       });
     }
