@@ -708,6 +708,8 @@ SELECT
 	COALESCE(s.started_at, ''),
 	m.model,
 	m.token_usage,
+	m.claude_message_id,
+	m.claude_request_id,
 	COALESCE(m.timestamp, s.started_at) as ts
 FROM messages m
 JOIN sessions s ON m.session_id = s.id
@@ -726,6 +728,12 @@ WHERE ` + usageMessageEligibility
 		args = append(args, padded)
 	}
 	query, args = f.appendFilterClauses(query, args)
+	// Deterministic order so the dedup "winner" (the session
+	// that gets credit for a duplicate message.id + request.id
+	// pair) is stable across runs: earliest timestamp wins,
+	// then session_id, then message ordinal.
+	query += ` ORDER BY COALESCE(m.timestamp, s.started_at) ASC,
+		m.session_id ASC, m.ordinal ASC`
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
@@ -749,6 +757,14 @@ WHERE ` + usageMessageEligibility
 	// Track insertion order for stable iteration.
 	var order []string
 
+	// Dedup duplicate Claude messages across fork/subagent
+	// boundaries so per-session totals match the aggregate
+	// totals from GetDailyUsage. Same key and ordering rules.
+	type dedupKey struct {
+		msgID, reqID string
+	}
+	seen := make(map[dedupKey]struct{})
+
 	var (
 		sid         string
 		displayName string
@@ -757,12 +773,15 @@ WHERE ` + usageMessageEligibility
 		startedAt   string
 		model       string
 		tokenJSON   string
+		msgID       string
+		reqID       string
 		ts          string
 	)
 	for rows.Next() {
 		if err := rows.Scan(
 			&sid, &displayName, &agent, &project,
-			&startedAt, &model, &tokenJSON, &ts,
+			&startedAt, &model, &tokenJSON,
+			&msgID, &reqID, &ts,
 		); err != nil {
 			return nil,
 				fmt.Errorf("scanning top sessions row: %w", err)
@@ -775,6 +794,17 @@ WHERE ` + usageMessageEligibility
 		}
 		if f.To != "" && date > f.To {
 			continue
+		}
+
+		// Dedup AFTER the date filter, matching GetDailyUsage,
+		// so out-of-range rows pulled in by the ±14h padding
+		// don't claim a key and suppress the in-range duplicate.
+		if msgID != "" && reqID != "" {
+			key := dedupKey{msgID: msgID, reqID: reqID}
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
 		}
 
 		usage := gjson.Parse(tokenJSON)

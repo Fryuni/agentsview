@@ -1054,6 +1054,117 @@ func TestGetTopSessionsByCost(t *testing.T) {
 	}
 }
 
+// TestGetTopSessionsByCost_DedupesByClaudeMessageAndRequestID
+// mirrors TestGetDailyUsage_DedupesByClaudeMessageAndRequestID
+// for the top-sessions query: a parent session and a forked
+// session that both replay the same Claude message should only
+// count that message once in the per-session totals. The
+// earliest-timestamp session wins the credit.
+func TestGetTopSessionsByCost_DedupesByClaudeMessageAndRequestID(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:         "claude-sonnet",
+		InputPerMTok:         3.0,
+		OutputPerMTok:        15.0,
+		CacheCreationPerMTok: 3.75,
+		CacheReadPerMTok:     0.30,
+	}}), "UpsertModelPricing")
+
+	// Parent session starts first.
+	insertSession(t, d, "s-parent", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = Ptr("2024-06-15T10:00:00Z")
+	})
+	// Forked session starts a minute later.
+	insertSession(t, d, "s-fork", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = Ptr("2024-06-15T10:01:00Z")
+		s.ParentSessionID = Ptr("s-parent")
+		s.RelationshipType = "fork"
+	})
+
+	shared := json.RawMessage(
+		`{"input_tokens":1000,"output_tokens":500,` +
+			`"cache_creation_input_tokens":200,` +
+			`"cache_read_input_tokens":3000}`)
+	unique := json.RawMessage(
+		`{"input_tokens":10,"output_tokens":20,` +
+			`"cache_creation_input_tokens":0,` +
+			`"cache_read_input_tokens":0}`)
+
+	// The shared message exists on both sessions with the same
+	// Claude IDs; the parent's timestamp is earlier so it should
+	// win the dedup.
+	insertMessages(t, d, Message{
+		SessionID: "s-parent", Ordinal: 0,
+		Role: "assistant", Timestamp: "2024-06-15T10:02:00Z",
+		Model: "claude-sonnet", TokenUsage: shared,
+		ClaudeMessageID: "msg_dup", ClaudeRequestID: "req_dup",
+	})
+	insertMessages(t, d, Message{
+		SessionID: "s-fork", Ordinal: 0,
+		Role: "assistant", Timestamp: "2024-06-15T10:03:00Z",
+		Model: "claude-sonnet", TokenUsage: shared,
+		ClaudeMessageID: "msg_dup", ClaudeRequestID: "req_dup",
+	})
+	// Plus a unique fork-only message so the fork still appears.
+	insertMessages(t, d, Message{
+		SessionID: "s-fork", Ordinal: 1,
+		Role: "assistant", Timestamp: "2024-06-15T10:04:00Z",
+		Model: "claude-sonnet", TokenUsage: unique,
+		ClaudeMessageID: "msg_uniq", ClaudeRequestID: "req_uniq",
+	})
+
+	top, err := d.GetTopSessionsByCost(ctx, UsageFilter{
+		From: "2024-06-15", To: "2024-06-15", Timezone: "UTC",
+	}, 20)
+	requireNoError(t, err, "GetTopSessionsByCost")
+
+	if len(top) != 2 {
+		t.Fatalf("got %d entries, want 2", len(top))
+	}
+
+	byID := map[string]TopSessionEntry{}
+	for _, e := range top {
+		byID[e.SessionID] = e
+	}
+
+	parent, ok := byID["s-parent"]
+	if !ok {
+		t.Fatal("s-parent missing from top sessions")
+	}
+	// Parent owns shared: 1000+500+200+3000 = 4700 tokens.
+	if parent.TotalTokens != 4700 {
+		t.Errorf("parent.TotalTokens = %d, want 4700",
+			parent.TotalTokens)
+	}
+
+	fork, ok := byID["s-fork"]
+	if !ok {
+		t.Fatal("s-fork missing from top sessions")
+	}
+	// Fork should only own the unique message: 10+20 = 30
+	// tokens. If the dedup were missing, the shared row would
+	// be counted again and this would jump to 4730.
+	if fork.TotalTokens != 30 {
+		t.Errorf("fork.TotalTokens = %d, want 30 "+
+			"(shared message should be deduped)",
+			fork.TotalTokens)
+	}
+
+	// Total across both entries must equal the undeduped
+	// message sum: parent 4700 + fork 30 = 4730.
+	total := parent.TotalTokens + fork.TotalTokens
+	if total != 4730 {
+		t.Errorf("sum of per-session totals = %d, want 4730",
+			total)
+	}
+}
+
 func TestGetTopSessionsByCostLimit(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
