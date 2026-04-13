@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS messages (
     output_tokens  INT NOT NULL DEFAULT 0,
     has_context_tokens BOOLEAN NOT NULL DEFAULT FALSE,
     has_output_tokens  BOOLEAN NOT NULL DEFAULT FALSE,
+    claude_message_id  TEXT NOT NULL DEFAULT '',
+    claude_request_id  TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (session_id, ordinal),
     FOREIGN KEY (session_id)
         REFERENCES sessions(id) ON DELETE CASCADE
@@ -229,6 +231,20 @@ func EnsureSchema(
 			 ADD COLUMN IF NOT EXISTS has_output_tokens
 			 BOOLEAN NOT NULL DEFAULT FALSE`,
 			"adding messages.has_output_tokens",
+		},
+		{
+			"messages", "claude_message_id",
+			`ALTER TABLE messages
+			 ADD COLUMN IF NOT EXISTS claude_message_id
+			 TEXT NOT NULL DEFAULT ''`,
+			"adding messages.claude_message_id",
+		},
+		{
+			"messages", "claude_request_id",
+			`ALTER TABLE messages
+			 ADD COLUMN IF NOT EXISTS claude_request_id
+			 TEXT NOT NULL DEFAULT ''`,
+			"adding messages.claude_request_id",
 		},
 		{
 			"tool_calls", "call_index",

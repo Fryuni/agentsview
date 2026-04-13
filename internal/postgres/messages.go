@@ -32,7 +32,8 @@ func (s *Store) GetMessages(
 			timestamp, has_thinking, has_tool_use,
 			content_length, is_system, model, token_usage,
 			context_tokens, output_tokens,
-			has_context_tokens, has_output_tokens
+			has_context_tokens, has_output_tokens,
+			claude_message_id, claude_request_id
 		FROM messages
 		WHERE session_id = $1 AND ordinal %s $2
 		ORDER BY ordinal %s
@@ -68,7 +69,8 @@ func (s *Store) GetAllMessages(
 			timestamp, has_thinking, has_tool_use,
 			content_length, is_system, model, token_usage,
 			context_tokens, output_tokens,
-			has_context_tokens, has_output_tokens
+			has_context_tokens, has_output_tokens,
+			claude_message_id, claude_request_id
 		FROM messages
 		WHERE session_id = $1
 		ORDER BY ordinal ASC`, sessionID)
@@ -527,6 +529,7 @@ func scanPGMessages(rows interface {
 			&m.Model, &tokenUsage,
 			&m.ContextTokens, &m.OutputTokens,
 			&m.HasContextTokens, &m.HasOutputTokens,
+			&m.ClaudeMessageID, &m.ClaudeRequestID,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"scanning message: %w", err,

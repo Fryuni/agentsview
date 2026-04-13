@@ -971,7 +971,8 @@ func pgMessageTokenFingerprint(
 ) (string, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT ordinal, model, token_usage, context_tokens,
-			output_tokens, has_context_tokens, has_output_tokens
+			output_tokens, has_context_tokens, has_output_tokens,
+			claude_message_id, claude_request_id
 		 FROM messages
 		 WHERE session_id = $1
 		 ORDER BY ordinal ASC`,
@@ -987,18 +988,21 @@ func pgMessageTokenFingerprint(
 		var ordinal, contextTokens, outputTokens int
 		var model, tokenUsage string
 		var hasContextTokens, hasOutputTokens bool
+		var claudeMsgID, claudeReqID string
 		if err := rows.Scan(
 			&ordinal, &model, &tokenUsage, &contextTokens,
 			&outputTokens, &hasContextTokens, &hasOutputTokens,
+			&claudeMsgID, &claudeReqID,
 		); err != nil {
 			return "", err
 		}
-		fmt.Fprintf(&b, "%d|%d:%s|%d:%s|%d|%d|%t|%t;",
+		fmt.Fprintf(&b, "%d|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s;",
 			ordinal,
 			len(model), model,
 			len(tokenUsage), tokenUsage,
 			contextTokens, outputTokens,
 			hasContextTokens, hasOutputTokens,
+			claudeMsgID, claudeReqID,
 		)
 	}
 	return b.String(), rows.Err()
@@ -1021,18 +1025,20 @@ func bulkInsertMessages(
 			timestamp, has_thinking, has_tool_use,
 			content_length, is_system, model, token_usage,
 			context_tokens, output_tokens,
-			has_context_tokens, has_output_tokens) VALUES `)
-		args := make([]any, 0, len(batch)*15)
+			has_context_tokens, has_output_tokens,
+			claude_message_id, claude_request_id) VALUES `)
+		args := make([]any, 0, len(batch)*17)
 		for j, m := range batch {
 			if j > 0 {
 				b.WriteByte(',')
 			}
-			p := j*15 + 1
+			p := j*17 + 1
 			fmt.Fprintf(&b,
-				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
 				p, p+1, p+2, p+3,
 				p+4, p+5, p+6, p+7, p+8,
 				p+9, p+10, p+11, p+12, p+13, p+14,
+				p+15, p+16,
 			)
 			var ts any
 			if m.Timestamp != "" {
@@ -1050,6 +1056,7 @@ func bulkInsertMessages(
 				m.Model, string(m.TokenUsage),
 				m.ContextTokens, m.OutputTokens,
 				m.HasContextTokens, m.HasOutputTokens,
+				m.ClaudeMessageID, m.ClaudeRequestID,
 			)
 		}
 		if _, err := tx.ExecContext(

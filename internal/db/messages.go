@@ -739,7 +739,8 @@ func (db *DB) MessageContentFingerprint(sessionID string) (sum, max, min int64, 
 func (db *DB) MessageTokenFingerprint(sessionID string) (string, error) {
 	rows, err := db.getReader().Query(
 		`SELECT ordinal, model, token_usage, context_tokens,
-			output_tokens, has_context_tokens, has_output_tokens
+			output_tokens, has_context_tokens, has_output_tokens,
+			claude_message_id, claude_request_id
 		 FROM messages
 		 WHERE session_id = ?
 		 ORDER BY ordinal ASC`,
@@ -755,18 +756,21 @@ func (db *DB) MessageTokenFingerprint(sessionID string) (string, error) {
 		var ordinal, contextTokens, outputTokens int
 		var model, tokenUsage string
 		var hasContextTokens, hasOutputTokens bool
+		var claudeMsgID, claudeReqID string
 		if err := rows.Scan(
 			&ordinal, &model, &tokenUsage, &contextTokens,
 			&outputTokens, &hasContextTokens, &hasOutputTokens,
+			&claudeMsgID, &claudeReqID,
 		); err != nil {
 			return "", err
 		}
-		fmt.Fprintf(&b, "%d|%d:%s|%d:%s|%d|%d|%t|%t;",
+		fmt.Fprintf(&b, "%d|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s;",
 			ordinal,
 			len(model), model,
 			len(tokenUsage), tokenUsage,
 			contextTokens, outputTokens,
 			hasContextTokens, hasOutputTokens,
+			claudeMsgID, claudeReqID,
 		)
 	}
 	return b.String(), rows.Err()
