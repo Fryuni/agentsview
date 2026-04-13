@@ -261,9 +261,13 @@ func runServe(args []string) {
 	}
 
 	// Seed model_pricing after any resync swap so the new DB
-	// file (which doesn't carry pricing across the swap) gets
-	// populated before the dashboard starts answering requests.
-	go seedPricingIfEmpty(database)
+	// file (which doesn't carry pricing across the swap) is
+	// populated before the dashboard starts answering
+	// requests. Synchronous so the first usage page load does
+	// not observe an empty table; the count check is a no-op
+	// after the initial seed, and ensurePricing falls back to
+	// hardcoded rates if the network fetch fails.
+	seedPricingIfEmpty(database)
 
 	// Auto-bind to 0.0.0.0 when remote access is enabled so the
 	// server is reachable from the network. Only override if the

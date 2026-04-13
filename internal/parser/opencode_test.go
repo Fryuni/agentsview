@@ -546,6 +546,78 @@ func TestParseOpenCodeDB_TokenUsage(t *testing.T) {
 		s.Session.PeakContextTokens, 12470) // 1 + 500 + 11969
 }
 
+// TestParseOpenCodeDB_ZeroTokens verifies that an explicit
+// tokens block with every counter set to zero is preserved as
+// "known zero" rather than collapsed to "unknown". The
+// normalized token_usage row is still written and both
+// coverage flags are set, so downstream rollups can
+// distinguish an errored request from a missing usage blob.
+func TestParseOpenCodeDB_ZeroTokens(t *testing.T) {
+	dbPath, seeder, db := newTestDB(t)
+	defer db.Close()
+
+	seeder.AddProject("prj_1", "/tmp/proj")
+	seeder.AddSession("ses_zero", "prj_1", "", "Zero",
+		1700000000000, 1700000010000)
+
+	seeder.AddMessage("msg_u", "ses_zero",
+		1700000000000, 1700000000000, `{"role":"user"}`)
+	seeder.AddPart("prt_u", "msg_u", "ses_zero",
+		1700000000000, 1700000000000,
+		`{"type":"text","text":"hi"}`)
+
+	// Errored assistant request: OpenCode still records the
+	// tokens object with every field set to zero. Non-empty
+	// content keeps the row out of the "empty message" filter
+	// so the usage extraction path is actually exercised.
+	seeder.AddMessage("msg_a", "ses_zero",
+		1700000005000, 1700000005000,
+		`{"role":"assistant","modelID":"gpt-5.2-chat-latest",`+
+			`"providerID":"openai","cost":0,`+
+			`"tokens":{"input":0,"output":0,"reasoning":0,`+
+			`"cache":{"read":0,"write":0}}}`)
+	seeder.AddPart("prt_a", "msg_a", "ses_zero",
+		1700000005000, 1700000005000,
+		`{"type":"text","text":"sorry, request failed"}`)
+
+	sessions, err := ParseOpenCodeDB(dbPath, "m")
+	if err != nil {
+		t.Fatalf("ParseOpenCodeDB: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("sessions len = %d, want 1", len(sessions))
+	}
+
+	var asst *ParsedMessage
+	for i := range sessions[0].Messages {
+		if sessions[0].Messages[i].Role == RoleAssistant {
+			asst = &sessions[0].Messages[i]
+			break
+		}
+	}
+	if asst == nil {
+		t.Fatal("missing assistant message")
+	}
+	assertEq(t, "Model", asst.Model, "gpt-5.2-chat-latest")
+	if len(asst.TokenUsage) == 0 {
+		t.Fatal("TokenUsage empty; want zero-valued JSON preserved")
+	}
+	var got map[string]int
+	if err := json.Unmarshal(asst.TokenUsage, &got); err != nil {
+		t.Fatalf("unmarshal TokenUsage: %v", err)
+	}
+	assertEq(t, "input_tokens", got["input_tokens"], 0)
+	assertEq(t, "output_tokens", got["output_tokens"], 0)
+	assertEq(t, "cache_read_input_tokens",
+		got["cache_read_input_tokens"], 0)
+	assertEq(t, "cache_creation_input_tokens",
+		got["cache_creation_input_tokens"], 0)
+	assertEq(t, "HasOutputTokens", asst.HasOutputTokens, true)
+	assertEq(t, "HasContextTokens", asst.HasContextTokens, true)
+	assertEq(t, "OutputTokens", asst.OutputTokens, 0)
+	assertEq(t, "ContextTokens", asst.ContextTokens, 0)
+}
+
 // TestParseOpenCodeDB_NoTokenUsage verifies that assistant
 // messages with no tokens block (e.g. errored requests) leave
 // TokenUsage empty so they are filtered out by the usage query.

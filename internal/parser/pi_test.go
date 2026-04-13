@@ -607,6 +607,38 @@ func TestParsePiSession_ModelFromModelChange(t *testing.T) {
 		"token usage extracted from message.usage")
 }
 
+// TestParsePiSession_ZeroUsage verifies that an explicit usage
+// block with every counter at zero is preserved as "known
+// zero" rather than collapsed to "unknown". The normalized
+// token_usage is still written and coverage flags follow field
+// presence, matching the claude parser contract and letting
+// downstream rollups distinguish an errored request from a
+// missing usage blob.
+func TestParsePiSession_ZeroUsage(t *testing.T) {
+	header := `{"type":"session","id":"zu-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/tmp"}` + "\n"
+	asst := `{"type":"message","id":"a1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"assistant","content":"oops","model":"gpt-5.4","usage":{"input":0,"output":0}}}`
+
+	_, msgs := runPiParserTest(t, header+asst)
+	require.Len(t, msgs, 1)
+	m := msgs[0]
+
+	assert.Equal(t, "gpt-5.4", m.Model)
+	require.NotEmpty(t, m.TokenUsage,
+		"zero-valued usage object must still write token_usage")
+
+	assert.Equal(t, int64(0),
+		gjson.GetBytes(m.TokenUsage, "input_tokens").Int())
+	assert.Equal(t, int64(0),
+		gjson.GetBytes(m.TokenUsage, "output_tokens").Int())
+
+	assert.True(t, m.HasOutputTokens,
+		"output field present => HasOutputTokens true even at zero")
+	assert.True(t, m.HasContextTokens,
+		"input field present => HasContextTokens true even at zero")
+	assert.Equal(t, 0, m.OutputTokens)
+	assert.Equal(t, 0, m.ContextTokens)
+}
+
 // TestParsePiSession_NoUsageNoTokenUsage verifies that messages
 // without a usage block do not write an empty token_usage row,
 // since the eligibility filter requires token_usage != ”.

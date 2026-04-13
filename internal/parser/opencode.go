@@ -487,6 +487,11 @@ func buildOpenCodeSession(
 // `cache.{read,write}` shape; this maps them onto the
 // agentsview-native `cache_{read,creation}_input_tokens` keys
 // that internal/db/usage.go expects.
+//
+// A present `tokens` object is treated as authoritative: even
+// when every counter is zero (e.g. an errored request) the
+// normalized usage is written and coverage flags are set, so
+// downstream rollups distinguish "known zero" from "unknown".
 func applyOpenCodeTokenUsage(
 	pm *ParsedMessage, md openCodeMessageData,
 ) {
@@ -497,10 +502,6 @@ func applyOpenCodeTokenUsage(
 		return
 	}
 	t := md.Tokens
-	if t.Input == 0 && t.Output == 0 &&
-		t.Cache.Read == 0 && t.Cache.Write == 0 {
-		return
-	}
 
 	normalized := map[string]int{
 		"input_tokens":                t.Input,
@@ -514,9 +515,9 @@ func applyOpenCodeTokenUsage(
 	}
 	pm.TokenUsage = j
 	pm.OutputTokens = t.Output
-	pm.HasOutputTokens = t.Output > 0
+	pm.HasOutputTokens = true
 	pm.ContextTokens = t.Input + t.Cache.Read + t.Cache.Write
-	pm.HasContextTokens = pm.ContextTokens > 0
+	pm.HasContextTokens = true
 }
 
 // openCodeDefaultTitleRe matches the exact placeholder format

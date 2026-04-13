@@ -324,6 +324,13 @@ func parsePiAssistantMessage(
 // Cache fields are read from both the nested cache.{read,write}
 // shape (OpenCode-style) and the flat cacheRead/cacheCreation
 // shape (Anthropic-style) so both transports work.
+//
+// A present `usage` object is treated as authoritative and its
+// raw counters are normalized even when every value is zero.
+// Coverage flags follow field presence rather than nonzero
+// values, matching the claude parser contract so an explicit
+// zero from an errored request is not conflated with missing
+// usage metadata.
 func applyPiTokenUsage(
 	pm *ParsedMessage, line, fallbackModel string,
 ) {
@@ -338,20 +345,21 @@ func applyPiTokenUsage(
 		return
 	}
 
-	input := int(usage.Get("input").Int())
-	output := int(usage.Get("output").Int())
-	cacheRead := int(usage.Get("cache.read").Int())
-	if cacheRead == 0 {
-		cacheRead = int(usage.Get("cacheRead").Int())
+	inputField := usage.Get("input")
+	outputField := usage.Get("output")
+	cacheReadField := usage.Get("cache.read")
+	if !cacheReadField.Exists() {
+		cacheReadField = usage.Get("cacheRead")
 	}
-	cacheCreate := int(usage.Get("cache.write").Int())
-	if cacheCreate == 0 {
-		cacheCreate = int(usage.Get("cacheCreation").Int())
+	cacheWriteField := usage.Get("cache.write")
+	if !cacheWriteField.Exists() {
+		cacheWriteField = usage.Get("cacheCreation")
 	}
 
-	if input == 0 && output == 0 && cacheRead == 0 && cacheCreate == 0 {
-		return
-	}
+	input := int(inputField.Int())
+	output := int(outputField.Int())
+	cacheRead := int(cacheReadField.Int())
+	cacheCreate := int(cacheWriteField.Int())
 
 	normalized := map[string]int{
 		"input_tokens":                input,
@@ -365,9 +373,10 @@ func applyPiTokenUsage(
 	}
 	pm.TokenUsage = j
 	pm.OutputTokens = output
-	pm.HasOutputTokens = output > 0
+	pm.HasOutputTokens = outputField.Exists()
 	pm.ContextTokens = input + cacheRead + cacheCreate
-	pm.HasContextTokens = pm.ContextTokens > 0
+	pm.HasContextTokens = inputField.Exists() ||
+		cacheReadField.Exists() || cacheWriteField.Exists()
 }
 
 // parsePiToolResultMessage parses a message entry with role="toolResult".
