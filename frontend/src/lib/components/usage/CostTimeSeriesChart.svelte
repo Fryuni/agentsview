@@ -142,25 +142,35 @@
 
   const BAR_WIDTH = 40;
 
-  // niceCeil rounds v up to the next "nice" round number
-  // (1, 2, 2.5, 5, 10 × 10^n) so the y-axis top tick is a
-  // readable value instead of an arbitrary data max. Combined
-  // with TOP_PAD this is what gives the chart its headroom.
-  function niceCeil(v: number): number {
-    if (!Number.isFinite(v) || v <= 0) return 1;
-    const exp = Math.floor(Math.log10(v));
+  // TICK_TARGET is the number of y-axis intervals we aim
+  // for. niceScale picks a step from the 1/2/5 × 10ⁿ set so
+  // the chosen max is always an integer multiple of the step
+  // and every tick lands on a round value. Actual interval
+  // count may come out as target ± 1 depending on where maxY
+  // falls.
+  const TICK_TARGET = 5;
+
+  function niceScale(
+    maxY: number,
+  ): { step: number; max: number } {
+    if (!Number.isFinite(maxY) || maxY <= 0) {
+      return { step: 0.25, max: 1 };
+    }
+    const rough = maxY / TICK_TARGET;
+    const exp = Math.floor(Math.log10(rough));
     const base = Math.pow(10, exp);
-    const normalized = v / base;
-    let nice: number;
-    if (normalized <= 1) nice = 1;
-    else if (normalized <= 2) nice = 2;
-    else if (normalized <= 2.5) nice = 2.5;
-    else if (normalized <= 5) nice = 5;
-    else nice = 10;
-    return nice * base;
+    const normalized = rough / base;
+    let mult: number;
+    if (normalized <= 1) mult = 1;
+    else if (normalized <= 2) mult = 2;
+    else if (normalized <= 5) mult = 5;
+    else mult = 10;
+    const step = mult * base;
+    const max = Math.ceil(maxY / step) * step;
+    return { step, max };
   }
 
-  const niceMax = $derived(niceCeil(seriesData.maxY));
+  const scale = $derived(niceScale(seriesData.maxY));
 
   // scaleY maps a data value in [0, niceMax] onto the plot
   // area [TOP_PAD, h], inverted so 0 is at the bottom. Kept
@@ -253,7 +263,7 @@
     buildPaths(
       seriesData.points,
       seriesData.keys,
-      niceMax,
+      scale.max,
       chartWidth,
       CHART_H,
     ),
@@ -300,13 +310,17 @@
   }
 
   const yTicks = $derived.by(() => {
-    if (niceMax <= 0) return [];
+    const { step, max } = scale;
+    if (max <= 0 || step <= 0) return [];
     const ticks: Array<{ y: number; label: string }> = [];
-    const count = 4;
+    // Step-driven loop so every tick is an integer multiple
+    // of step and the top tick equals max exactly. Rounding
+    // guards against floating-point drift on sub-unit steps.
+    const count = Math.round(max / step);
     for (let i = 0; i <= count; i++) {
-      const val = (niceMax / count) * i;
+      const val = step * i;
       ticks.push({
-        y: scaleY(val, niceMax, CHART_H),
+        y: scaleY(val, max, CHART_H),
         label: fmtYLabel(val),
       });
     }
