@@ -1728,6 +1728,23 @@ func (e *Engine) shouldSkipByPath(
 		storedMtime == info.ModTime().UnixNano()
 }
 
+// fakeSnapshotInfo wraps a pre-computed size and mtime
+// (nanoseconds) as os.FileInfo so that shouldSkipByPath can
+// be reused for OpenHands snapshot-based skip detection.
+type fakeSnapshotInfo struct {
+	fSize  int64
+	fMtime int64
+}
+
+func (f fakeSnapshotInfo) Name() string      { return "" }
+func (f fakeSnapshotInfo) Size() int64       { return f.fSize }
+func (f fakeSnapshotInfo) Mode() os.FileMode { return 0 }
+func (f fakeSnapshotInfo) ModTime() time.Time {
+	return time.Unix(0, f.fMtime)
+}
+func (f fakeSnapshotInfo) IsDir() bool { return false }
+func (f fakeSnapshotInfo) Sys() any    { return nil }
+
 func (e *Engine) processClaude(
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
@@ -2315,16 +2332,10 @@ func (e *Engine) processOpenHands(
 		return processResult{err: err}
 	}
 
-	lookupPath := file.Path
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(file.Path)
+	fi := fakeSnapshotInfo{
+		fSize: snapshot.Size, fMtime: snapshot.Mtime,
 	}
-	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(
-		lookupPath,
-	)
-	if ok &&
-		storedSize == snapshot.Size &&
-		storedMtime == snapshot.Mtime {
+	if e.shouldSkipByPath(file.Path, fi) {
 		return processResult{skip: true}
 	}
 
