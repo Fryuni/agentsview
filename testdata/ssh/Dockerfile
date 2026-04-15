@@ -2,6 +2,7 @@ FROM alpine:3.21
 RUN apk add --no-cache openssh-server tar && \
     ssh-keygen -A && \
     adduser -D -s /bin/sh testuser && \
+    passwd -u testuser && \
     mkdir -p /home/testuser/.ssh && \
     ssh-keygen -t ed25519 -f /home/testuser/.ssh/id_test -N "" && \
     cat /home/testuser/.ssh/id_test.pub \
@@ -23,10 +24,12 @@ RUN printf '%s\n' \
     "Subsystem sftp /usr/lib/ssh/sftp-server" \
     > /etc/ssh/sshd_config
 
-# Claude session fixture
-RUN mkdir -p /home/testuser/.claude/projects/test-project/aaaaaaaa-1111-2222-3333-444444444444
+# Claude session fixture: file must be <project>/<uuid>.jsonl
+# (DiscoverClaudeProjects looks for .jsonl files directly in
+# project dirs, not inside subdirectories)
+RUN mkdir -p /home/testuser/.claude/projects/test-project
 COPY testdata/ssh/session.jsonl \
-    /home/testuser/.claude/projects/test-project/aaaaaaaa-1111-2222-3333-444444444444/session.jsonl
+    /home/testuser/.claude/projects/test-project/aaaaaaaa-1111-2222-3333-444444444444.jsonl
 RUN chown -R testuser:testuser /home/testuser/.claude
 
 EXPOSE 22
