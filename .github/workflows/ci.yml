@@ -150,6 +150,18 @@ jobs:
           docker cp sshd-test:/tmp/test_ssh_key testdata/ssh/test_key
           chmod 600 testdata/ssh/test_key
 
+      - name: Verify SSH connectivity
+        run: |
+          echo "=== Key file ==="
+          ls -la testdata/ssh/test_key
+          head -1 testdata/ssh/test_key
+          echo "=== Container sshd_config ==="
+          docker exec sshd-test cat /etc/ssh/sshd_config
+          echo "=== Container authorized_keys ==="
+          docker exec sshd-test cat /home/testuser/.ssh/authorized_keys
+          echo "=== Test SSH connection ==="
+          ssh -v -i testdata/ssh/test_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 testuser@localhost echo "SSH works" 2>&1 || true
+
       - name: Run SSH integration tests
         run: make test-ssh-ci
         env:
