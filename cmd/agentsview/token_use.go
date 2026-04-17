@@ -27,13 +27,36 @@ const (
 	tokenUseResolveMatchLimit = 2
 )
 
+// isCanonicalSessionID reports whether id is already in the
+// canonical form stored in sessions.id: either a host-prefixed
+// remote ID ("host~<id>") or an ID beginning with a registered
+// agent prefix ("codex:", "kimi:", ...). A bare input with no
+// recognised prefix is treated as a raw ID even when it contains
+// ':' because agents like Kimi and OpenClaw emit colon-bearing
+// raw IDs.
+func isCanonicalSessionID(id string) bool {
+	host, rawID := parser.StripHostPrefix(id)
+	if host != "" {
+		return true
+	}
+	for _, def := range parser.Registry {
+		if def.IDPrefix != "" &&
+			strings.HasPrefix(rawID, def.IDPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // resolveRawSessionID translates a user-supplied session ID into
 // the canonical form stored in sessions.id. Callers may pass
-// either a prefixed ID ("codex:<uuid>") or a bare raw ID as
-// emitted by the underlying agent. Resolution order:
+// either a canonical ID ("codex:<uuid>") or a bare raw ID as
+// emitted by the underlying agent — including raw IDs that
+// contain colons themselves (Kimi: "<project-hash>:<session-uuid>",
+// OpenClaw: "<agentId>:<sessionId>"). Resolution order:
 //
-//  1. Input already contains ':' -> returned unchanged (trust the
-//     caller; preserves exact-match contract for prefixed IDs).
+//  1. Input already carries a canonical prefix (host~... or
+//     <agent>:...) -> returned unchanged.
 //  2. DB lookup: exact match OR suffix match against ":<input>";
 //     exact match wins, otherwise most-recent suffix match wins
 //     (rare ambiguity is reported to stderr).
@@ -51,7 +74,7 @@ func resolveRawSessionID(
 	agentDirs map[parser.AgentType][]string,
 	input string,
 ) (resolved string, known bool) {
-	if strings.Contains(input, ":") {
+	if isCanonicalSessionID(input) {
 		return input, true
 	}
 

@@ -862,11 +862,12 @@ func (db *DB) FindSessionIDsByPartial(
 
 // FindSessionIDsByRawSuffix returns up to limit session IDs whose
 // stored id is either the exact raw input or the raw input
-// preceded by an agent prefix (e.g. "codex:<uuid>"). Unlike the
-// substring match of FindSessionIDsByPartial, this only matches
-// when raw is the final ID component, mirroring how agents emit
-// their own thread/session IDs. Results are sorted by most
-// recently active first. Excludes soft-deleted sessions.
+// preceded by an agent prefix (e.g. "codex:<uuid>"). The suffix
+// comparison uses SUBSTR rather than LIKE so that SQL wildcard
+// characters ('_' and '%') present in session IDs (which permit
+// underscores) are compared literally instead of matching any
+// character. Results are sorted by most recently active first.
+// Excludes soft-deleted sessions.
 func (db *DB) FindSessionIDsByRawSuffix(
 	ctx context.Context, raw string, limit int,
 ) ([]string, error) {
@@ -878,7 +879,8 @@ func (db *DB) FindSessionIDsByRawSuffix(
 	}
 	rows, err := db.getReader().QueryContext(ctx,
 		`SELECT id FROM sessions
-		 WHERE (id = ?1 OR id LIKE '%:' || ?1)
+		 WHERE (id = ?1
+		        OR SUBSTR(id, -(LENGTH(?1) + 1)) = ':' || ?1)
 		   AND deleted_at IS NULL
 		 ORDER BY COALESCE(
 		     NULLIF(ended_at, ''),

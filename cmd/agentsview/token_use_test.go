@@ -176,6 +176,86 @@ func TestResolveSessionID_BareClaudeAndPrefixedSameUUID_ClaudeExactWins(t *testi
 	}
 }
 
+func TestResolveSessionID_KimiRawID_ResolvesToPrefixed(t *testing.T) {
+	d := newTestDB(t)
+	ctx := context.Background()
+
+	// Kimi raw IDs have the shape "<project-hash>:<session-uuid>".
+	// The stored canonical form prepends "kimi:".
+	raw := "proj-hash-abc:66666666-6666-6666-6666-666666666666"
+	stored := "kimi:" + raw
+	upsertSession(t, d, stored, "kimi", "2026-04-17T10:00:00Z")
+
+	got, known := resolveRawSessionID(ctx, d, nil, raw)
+	if got != stored {
+		t.Errorf("got %q, want %q (kimi raw ID resolves)", got, stored)
+	}
+	if !known {
+		t.Errorf("known = false, want true")
+	}
+}
+
+func TestResolveSessionID_OpenClawRawID_ResolvesToPrefixed(t *testing.T) {
+	d := newTestDB(t)
+	ctx := context.Background()
+
+	// OpenClaw raw IDs have the shape "<agentId>:<sessionId>".
+	raw := "main:abc-123"
+	stored := "openclaw:" + raw
+	upsertSession(t, d, stored, "openclaw", "2026-04-17T10:00:00Z")
+
+	got, known := resolveRawSessionID(ctx, d, nil, raw)
+	if got != stored {
+		t.Errorf("got %q, want %q (openclaw raw ID resolves)",
+			got, stored)
+	}
+	if !known {
+		t.Errorf("known = false, want true")
+	}
+}
+
+func TestResolveSessionID_CanonicalKimiID_ReturnedUnchanged(t *testing.T) {
+	d := newTestDB(t)
+	ctx := context.Background()
+
+	// A fully canonical Kimi ID contains two colons; it must
+	// be returned as-is (the "kimi:" prefix is the signal).
+	input := "kimi:proj-abc:77777777-7777-7777-7777-777777777777"
+	got, known := resolveRawSessionID(ctx, d, nil, input)
+	if got != input {
+		t.Errorf("got %q, want %q (canonical)", got, input)
+	}
+	if !known {
+		t.Errorf("known = false, want true (canonical prefix)")
+	}
+}
+
+func TestResolveSessionID_UnderscoreID_NoFalseMatch(t *testing.T) {
+	d := newTestDB(t)
+	ctx := context.Background()
+
+	// Underscore is a LIKE wildcard in SQLite. If the query
+	// uses LIKE naively, a raw id "20260403_aaa" would match
+	// rows whose id ends with ":20260403Xaaa" (X = any char).
+	// Insert a decoy that would only match under naive LIKE
+	// semantics, plus a true match, and assert the true match
+	// wins.
+	raw := "20260403_aaa"
+	decoy := "codex:20260403Xaaa"
+	real := "codex:" + raw
+	upsertSession(t, d, decoy, "codex", "2026-04-16T10:00:00Z")
+	upsertSession(t, d, real, "codex", "2026-04-17T10:00:00Z")
+
+	got, known := resolveRawSessionID(ctx, d, nil, raw)
+	if got != real {
+		t.Errorf("got %q, want %q (underscore is literal)",
+			got, real)
+	}
+	if !known {
+		t.Errorf("known = false, want true")
+	}
+}
+
 func TestTokenUseExitCode_Found(t *testing.T) {
 	sess := &db.Session{
 		ID:                   "codex:xxx",
