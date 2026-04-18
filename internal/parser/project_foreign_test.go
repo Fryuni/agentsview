@@ -5,8 +5,10 @@ import (
 	"os"
 	"reflect"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // autofsTestsSupported reports whether the running OS uses POSIX
@@ -238,6 +240,107 @@ func TestDetectAutofsPrefixes(t *testing.T) {
 	want := []string{"/home/", "/Network/Servers/"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("detectAutofsPrefixes() = %v, want %v", got, want)
+	}
+}
+
+// TestExtractProjectFromCwd_AutofsConcurrent_SingleProbe exercises
+// the single-flight guarantee: N goroutines hitting the same
+// unresolved autofs prefix must share a single probe, not race
+// each other into N duplicate automount attempts.
+func TestExtractProjectFromCwd_AutofsConcurrent_SingleProbe(t *testing.T) {
+	if !autofsTestsSupported() {
+		t.Skip("autofs tests require POSIX path separators")
+	}
+	origPrefixes := autofsPrefixes
+	defer func() { autofsPrefixes = origPrefixes }()
+	autofsPrefixes = []string{"/home/"}
+	resetAutofsProbes()
+
+	// Hold osStat open so later callers have a chance to pile
+	// up against the first one. Without single-flight all of
+	// them will issue their own stat before the cache populates.
+	release := make(chan struct{})
+	orig := osStat
+	defer func() { osStat = orig }()
+	var count atomic.Int64
+	osStat = func(path string) (os.FileInfo, error) {
+		count.Add(1)
+		<-release
+		return nil, os.ErrNotExist
+	}
+
+	const workers = 16
+	var started sync.WaitGroup
+	var done sync.WaitGroup
+	started.Add(workers)
+	done.Add(workers)
+	for range workers {
+		go func() {
+			defer done.Done()
+			started.Done()
+			_ = ExtractProjectFromCwdWithBranch(
+				"/home/wes/code/proj", "")
+		}()
+	}
+	started.Wait()
+	// Give the workers a moment to actually enter the probe.
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	done.Wait()
+
+	if n := count.Load(); n != 1 {
+		t.Errorf("concurrent probes issued %d osStat calls; "+
+			"expected exactly 1 under %d-way concurrency",
+			n, workers)
+	}
+}
+
+// TestExtractProjectFromCwd_AutofsProbe_TTLExpires guards against
+// permanently caching a negative probe result. A path that was
+// unreachable at first access should be re-probed after the TTL
+// so a later-appearing mount (e.g. delayed NFS availability on a
+// long-running server) can start resolving to its repository
+// root.
+func TestExtractProjectFromCwd_AutofsProbe_TTLExpires(t *testing.T) {
+	if !autofsTestsSupported() {
+		t.Skip("autofs tests require POSIX path separators")
+	}
+	origPrefixes := autofsPrefixes
+	defer func() { autofsPrefixes = origPrefixes }()
+	autofsPrefixes = []string{"/home/"}
+	resetAutofsProbes()
+
+	origNow := nowFn
+	defer func() { nowFn = origNow }()
+	current := time.Now()
+	nowFn = func() time.Time { return current }
+
+	orig := osStat
+	defer func() { osStat = orig }()
+	var count atomic.Int64
+	osStat = func(path string) (os.FileInfo, error) {
+		count.Add(1)
+		return nil, os.ErrNotExist
+	}
+
+	cwd := "/home/wes/code/proj"
+	_ = ExtractProjectFromCwdWithBranch(cwd, "")
+	if n := count.Load(); n != 1 {
+		t.Fatalf("first call: expected 1 osStat, got %d", n)
+	}
+
+	// Within TTL — cached, no new probe.
+	current = current.Add(autofsProbeTTL / 2)
+	_ = ExtractProjectFromCwdWithBranch(cwd, "")
+	if n := count.Load(); n != 1 {
+		t.Fatalf("within TTL: expected still 1 osStat, got %d", n)
+	}
+
+	// Past TTL — re-probe.
+	current = current.Add(autofsProbeTTL + time.Second)
+	_ = ExtractProjectFromCwdWithBranch(cwd, "")
+	if n := count.Load(); n != 2 {
+		t.Errorf("past TTL: expected 2 osStat calls, got %d", n)
 	}
 }
 

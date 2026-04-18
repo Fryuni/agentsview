@@ -7,7 +7,10 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // osStat is indirected through a var so tests can intercept stat
@@ -260,27 +263,47 @@ func isForeignOSPath(cwd, cleaned string, winPath bool) bool {
 	return false
 }
 
+// autofsProbeTTL bounds how long a probe result (positive or
+// negative) is trusted. Long enough that a bulk sync pays for
+// one probe per unique prefix user; short enough that a long-
+// running server rediscovers a mount that came up after startup.
+const autofsProbeTTL = 60 * time.Second
+
+// nowFn is indirected so TTL-expiry tests can advance the clock.
+var nowFn = time.Now
+
+type autofsProbeEntry struct {
+	resolves bool
+	expires  time.Time
+}
+
 // autofsProbes memoises whether the first path component under an
-// autofs prefix actually resolves locally. The cache is keyed by
-// the probed path (e.g. "/home/wes"), so a bulk sync whose cwds
-// all share a single <prefix>/<user> pays one stat overall rather
-// than one per session.
+// autofs prefix resolves locally. Keyed by the probed path
+// (e.g. "/home/wes"), so a bulk sync whose cwds all share a
+// single <prefix>/<user> pays one probe rather than one per
+// session.
+//
+// Writes go through autofsProbeSF to collapse concurrent misses
+// for the same key into a single osStat call — critical because
+// sync workers probe in parallel.
 var (
-	autofsProbesMu sync.RWMutex
-	autofsProbes   = map[string]bool{}
+	autofsProbesMu sync.Mutex
+	autofsProbes   = map[string]autofsProbeEntry{}
+	autofsProbeSF  singleflight.Group
 )
 
-// resetAutofsProbes clears the probe cache. Intended for tests
-// that need deterministic probe counts.
+// resetAutofsProbes clears the cache and in-flight probes.
+// Intended for tests that need deterministic probe counts.
 func resetAutofsProbes() {
 	autofsProbesMu.Lock()
-	autofsProbes = map[string]bool{}
+	autofsProbes = map[string]autofsProbeEntry{}
 	autofsProbesMu.Unlock()
+	autofsProbeSF = singleflight.Group{}
 }
 
 // autofsFirstLevelResolves probes whether <prefix>/<first-comp>
-// exists as a real filesystem entry on this host. The result is
-// cached per probed path.
+// exists as a real filesystem entry. Results are cached for
+// autofsProbeTTL and concurrent misses share a single probe.
 func autofsFirstLevelResolves(prefix, cleaned string) bool {
 	rest := cleaned[len(prefix):]
 	if i := strings.IndexByte(rest, '/'); i >= 0 {
@@ -288,20 +311,42 @@ func autofsFirstLevelResolves(prefix, cleaned string) bool {
 	}
 	key := prefix + rest
 
-	autofsProbesMu.RLock()
-	resolves, ok := autofsProbes[key]
-	autofsProbesMu.RUnlock()
-	if ok {
+	if resolves, ok := lookupAutofsProbe(key); ok {
 		return resolves
 	}
 
-	_, err := osStat(key)
-	resolves = err == nil
+	v, _, _ := autofsProbeSF.Do(key, func() (any, error) {
+		// Re-check inside the singleflight slot: a prior
+		// caller for the same key may have just populated
+		// the cache while we were waiting for the slot.
+		if resolves, ok := lookupAutofsProbe(key); ok {
+			return resolves, nil
+		}
+		_, err := osStat(key)
+		resolves := err == nil
+		storeAutofsProbe(key, resolves)
+		return resolves, nil
+	})
+	return v.(bool)
+}
 
+func lookupAutofsProbe(key string) (bool, bool) {
 	autofsProbesMu.Lock()
-	autofsProbes[key] = resolves
+	defer autofsProbesMu.Unlock()
+	entry, ok := autofsProbes[key]
+	if !ok || !nowFn().Before(entry.expires) {
+		return false, false
+	}
+	return entry.resolves, true
+}
+
+func storeAutofsProbe(key string, resolves bool) {
+	autofsProbesMu.Lock()
+	autofsProbes[key] = autofsProbeEntry{
+		resolves: resolves,
+		expires:  nowFn().Add(autofsProbeTTL),
+	}
 	autofsProbesMu.Unlock()
-	return resolves
 }
 
 // looksLikeWindowsPath returns true when cwd appears to use
