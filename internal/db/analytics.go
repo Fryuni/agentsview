@@ -1755,6 +1755,199 @@ type velocityAccumulator struct {
 	sessions       int
 }
 
+// populateVelocityAccumulator fetches per-message timestamps and tool
+// counts for the given sessions and feeds them through
+// processSessionVelocity into a single accumulator. Used by
+// GetSessionStats, which already has its filtered session list and
+// only needs the overall velocity slice — no agent/complexity
+// breakdowns. Sessions with fewer than two messages are silently
+// skipped, matching GetAnalyticsVelocity.
+func populateVelocityAccumulator(
+	ctx context.Context, db *DB, sessionIDs []string,
+	loc *time.Location,
+) (*velocityAccumulator, error) {
+	accum := &velocityAccumulator{}
+	if len(sessionIDs) == 0 {
+		return accum, nil
+	}
+
+	sessionMsgs := make(map[string][]velocityMsg)
+	if err := queryChunked(sessionIDs,
+		func(chunk []string) error {
+			return db.queryVelocityMsgs(
+				ctx, chunk, loc, sessionMsgs,
+			)
+		}); err != nil {
+		return nil, err
+	}
+
+	toolCountMap := make(map[string]int)
+	err := queryChunked(sessionIDs,
+		func(chunk []string) error {
+			ph, chunkArgs := inPlaceholders(chunk)
+			q := `SELECT session_id, COUNT(*)
+				FROM tool_calls
+				WHERE session_id IN ` + ph + `
+				GROUP BY session_id`
+			rows, qErr := db.getReader().QueryContext(
+				ctx, q, chunkArgs...,
+			)
+			if qErr != nil {
+				return fmt.Errorf(
+					"querying velocity tool_calls: %w", qErr,
+				)
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var sid string
+				var count int
+				if err := rows.Scan(&sid, &count); err != nil {
+					return fmt.Errorf(
+						"scanning velocity tool_call: %w", err,
+					)
+				}
+				toolCountMap[sid] = count
+			}
+			return rows.Err()
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	for _, sid := range sessionIDs {
+		msgs := sessionMsgs[sid]
+		if len(msgs) < 2 {
+			continue
+		}
+		processSessionVelocity(
+			[]*velocityAccumulator{accum},
+			msgs, toolCountMap[sid],
+		)
+	}
+	return accum, nil
+}
+
+// processSessionVelocity updates every accumulator in accums with one
+// session's turn cycles, first response, and throughput contribution.
+// Shared by GetAnalyticsVelocity (which tracks overall/byAgent/
+// byComplexity) and GetSessionStats (which tracks a single overall).
+//
+// Caller responsibilities: pass len(msgs) >= 2 in ordinal order, and
+// bump each accumulator's sessions counter — this helper only
+// accumulates the sample values, not the session count.
+func processSessionVelocity(
+	accums []*velocityAccumulator,
+	msgs []velocityMsg,
+	toolCount int,
+) {
+	const maxCycleSec = 1800.0
+	const maxGapSec = 300.0
+
+	for _, a := range accums {
+		a.sessions++
+	}
+
+	// Turn cycles: user→assistant transitions
+	for i := 1; i < len(msgs); i++ {
+		prev := msgs[i-1]
+		cur := msgs[i]
+		if !prev.valid || !cur.valid {
+			continue
+		}
+		if prev.role == "user" && cur.role == "assistant" {
+			delta := cur.ts.Sub(prev.ts).Seconds()
+			if delta > 0 && delta <= maxCycleSec {
+				for _, a := range accums {
+					a.turnCycles = append(a.turnCycles, delta)
+				}
+			}
+		}
+	}
+
+	// First response: first user → first assistant after it.
+	// Scan by ordinal (conversation order), not timestamp.
+	var firstUser, firstAsst *velocityMsg
+	firstUserIdx := -1
+	for i := range msgs {
+		if msgs[i].role == "user" && msgs[i].valid {
+			firstUser = &msgs[i]
+			firstUserIdx = i
+			break
+		}
+	}
+	if firstUserIdx >= 0 {
+		for i := firstUserIdx + 1; i < len(msgs); i++ {
+			if msgs[i].role == "assistant" && msgs[i].valid {
+				firstAsst = &msgs[i]
+				break
+			}
+		}
+	}
+	if firstUser != nil && firstAsst != nil {
+		delta := firstAsst.ts.Sub(firstUser.ts).Seconds()
+		// Clamp negative deltas to 0: ordinal order is
+		// authoritative, so a negative delta means clock skew,
+		// not a missing response.
+		if delta < 0 {
+			delta = 0
+		}
+		for _, a := range accums {
+			a.firstResponses = append(a.firstResponses, delta)
+		}
+	}
+
+	// Active minutes and throughput
+	activeSec := 0.0
+	asstChars := 0
+	for i, m := range msgs {
+		if m.role == "assistant" {
+			asstChars += m.contentLength
+		}
+		if i > 0 && msgs[i-1].valid && m.valid {
+			gap := m.ts.Sub(msgs[i-1].ts).Seconds()
+			if gap > 0 {
+				if gap > maxGapSec {
+					gap = maxGapSec
+				}
+				activeSec += gap
+			}
+		}
+	}
+	activeMins := activeSec / 60.0
+	if activeMins > 0 {
+		for _, a := range accums {
+			a.totalMsgs += len(msgs)
+			a.totalChars += asstChars
+			a.totalToolCalls += toolCount
+			a.activeMinutes += activeMins
+		}
+	}
+}
+
+// turnCycleMean returns the arithmetic mean of turnCycles, or 0 when
+// empty. Session stats reports mean alongside p50/p90 — the retained
+// slice lets us compute both from the same sample.
+func (a *velocityAccumulator) turnCycleMean() float64 {
+	return meanFloats(a.turnCycles)
+}
+
+// firstResponseMean returns the arithmetic mean of firstResponses, or
+// 0 when empty. See turnCycleMean for rationale.
+func (a *velocityAccumulator) firstResponseMean() float64 {
+	return meanFloats(a.firstResponses)
+}
+
+func meanFloats(xs []float64) float64 {
+	if len(xs) == 0 {
+		return 0
+	}
+	var sum float64
+	for _, x := range xs {
+		sum += x
+	}
+	return sum / float64(len(xs))
+}
+
 func (a *velocityAccumulator) computeOverview() VelocityOverview {
 	sort.Float64s(a.turnCycles)
 	sort.Float64s(a.firstResponses)
@@ -1905,9 +2098,6 @@ func (db *DB) GetAnalyticsVelocity(
 	byAgent := make(map[string]*velocityAccumulator)
 	byComplexity := make(map[string]*velocityAccumulator)
 
-	const maxCycleSec = 1800.0
-	const maxGapSec = 300.0
-
 	for _, sid := range sessionIDs {
 		info := sessionMap[sid]
 		msgs := sessionMsgs[sid]
@@ -1925,95 +2115,12 @@ func (db *DB) GetAnalyticsVelocity(
 			byComplexity[compKey] = &velocityAccumulator{}
 		}
 
-		accums := []*velocityAccumulator{
-			overall, byAgent[agentKey], byComplexity[compKey],
-		}
-
-		for _, a := range accums {
-			a.sessions++
-		}
-
-		// Turn cycles: user→assistant transitions
-		for i := 1; i < len(msgs); i++ {
-			prev := msgs[i-1]
-			cur := msgs[i]
-			if !prev.valid || !cur.valid {
-				continue
-			}
-			if prev.role == "user" && cur.role == "assistant" {
-				delta := cur.ts.Sub(prev.ts).Seconds()
-				if delta > 0 && delta <= maxCycleSec {
-					for _, a := range accums {
-						a.turnCycles = append(
-							a.turnCycles, delta,
-						)
-					}
-				}
-			}
-		}
-
-		// First response: first user → first assistant after it
-		// Scan by ordinal (conversation order), not timestamp.
-		var firstUser, firstAsst *velocityMsg
-		firstUserIdx := -1
-		for i := range msgs {
-			if msgs[i].role == "user" && msgs[i].valid {
-				firstUser = &msgs[i]
-				firstUserIdx = i
-				break
-			}
-		}
-		if firstUserIdx >= 0 {
-			for i := firstUserIdx + 1; i < len(msgs); i++ {
-				if msgs[i].role == "assistant" &&
-					msgs[i].valid {
-					firstAsst = &msgs[i]
-					break
-				}
-			}
-		}
-		if firstUser != nil && firstAsst != nil {
-			delta := firstAsst.ts.Sub(firstUser.ts).Seconds()
-			// Clamp negative deltas to 0: ordinal order is
-			// authoritative, so a negative delta means clock
-			// skew, not a missing response.
-			if delta < 0 {
-				delta = 0
-			}
-			for _, a := range accums {
-				a.firstResponses = append(
-					a.firstResponses, delta,
-				)
-			}
-		}
-
-		// Active minutes and throughput
-		activeSec := 0.0
-		asstChars := 0
-		for i, m := range msgs {
-			if m.role == "assistant" {
-				asstChars += m.contentLength
-			}
-			if i > 0 && msgs[i-1].valid && m.valid {
-				gap := m.ts.Sub(msgs[i-1].ts).Seconds()
-				if gap > 0 {
-					if gap > maxGapSec {
-						gap = maxGapSec
-					}
-					activeSec += gap
-				}
-			}
-		}
-		activeMins := activeSec / 60.0
-		if activeMins > 0 {
-			tc := toolCountMap[sid]
-			for _, a := range accums {
-				a.totalMsgs += len(msgs)
-				a.totalChars += asstChars
-				a.totalToolCalls += tc
-				a.activeMinutes += activeMins
-			}
-		}
+		processSessionVelocity(
+			[]*velocityAccumulator{
+				overall, byAgent[agentKey], byComplexity[compKey],
+			},
+			msgs, toolCountMap[sid],
+		)
 	}
 
 	resp := VelocityResponse{

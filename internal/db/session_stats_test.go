@@ -662,3 +662,119 @@ func TestGetSessionStats_Distributions_NullPeakContext(t *testing.T) {
 			"(the one Claude session with hasPeakContext=true)", total)
 	}
 }
+
+// seedVelocityMessages inserts len(offsetsSec) messages for sessionID,
+// alternating user/assistant starting at role[0], with timestamps at
+// startedAt+offsetsSec[i]. Used by velocity tests that need precise
+// intervals between adjacent messages. Returns nothing; panics via t
+// on any insert error.
+func seedVelocityMessages(
+	t *testing.T, d *DB, sessionID, startedAt string,
+	offsetsSec []int,
+) {
+	t.Helper()
+	start, err := time.Parse(time.RFC3339, startedAt)
+	if err != nil {
+		t.Fatalf("seedVelocityMessages %s: parse startedAt %q: %v",
+			sessionID, startedAt, err)
+	}
+	msgs := make([]Message, 0, len(offsetsSec))
+	for i, off := range offsetsSec {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		ts := start.Add(time.Duration(off) * time.Second).
+			UTC().Format(time.RFC3339)
+		msgs = append(msgs, Message{
+			SessionID:     sessionID,
+			Ordinal:       i,
+			Role:          role,
+			Content:       fmt.Sprintf("m%d", i),
+			ContentLength: 5,
+			Timestamp:     ts,
+		})
+	}
+	if err := d.InsertMessages(msgs); err != nil {
+		t.Fatalf("seedVelocityMessages %s: InsertMessages: %v",
+			sessionID, err)
+	}
+}
+
+func TestGetSessionStats_Velocity(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Two sessions with carefully chosen per-message gaps so the
+	// expected percentile/mean/hourly values are determined.
+	//
+	// Session v1: 6 msgs at offsets 0,10,20,25,35,50 (seconds).
+	//   Turn cycles (user→assistant): 10, 5, 15.
+	//   First response: 10.
+	//   Adjacent gaps: 10,10,5,10,15 = 50s active.
+	// Session v2: 4 msgs at offsets 0,30,60,80.
+	//   Turn cycles: 30, 20.
+	//   First response: 30.
+	//   Adjacent gaps: 30,30,20 = 80s active.
+	//
+	// Combined: turn cycles=[5,10,15,20,30], first responses=[10,30],
+	// active seconds=130, messages=10.
+	start := time.Now().UTC().Add(-5 * time.Hour).
+		Format(time.RFC3339)
+
+	insertSessionFixture(t, d, sessionFixture{
+		id: "v1", agent: "claude", userMsgs: 3,
+		messageCount: 6, startedAt: start,
+	})
+	seedVelocityMessages(t, d, "v1", start,
+		[]int{0, 10, 20, 25, 35, 50})
+
+	insertSessionFixture(t, d, sessionFixture{
+		id: "v2", agent: "claude", userMsgs: 2,
+		messageCount: 4, startedAt: start,
+	})
+	seedVelocityMessages(t, d, "v2", start,
+		[]int{0, 30, 60, 80})
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+
+	// Turn cycle seconds, sorted = [5,10,15,20,30].
+	// percentileFloat: P50 idx=int(5*0.5)=2 → 15, P90 idx=4 → 30.
+	// Mean = (5+10+15+20+30)/5 = 16.
+	tc := stats.Velocity.TurnCycleSeconds
+	if tc.P50 != 15.0 {
+		t.Errorf("TurnCycleSeconds.P50: got %v want 15", tc.P50)
+	}
+	if tc.P90 != 30.0 {
+		t.Errorf("TurnCycleSeconds.P90: got %v want 30", tc.P90)
+	}
+	if !floatsClose(tc.Mean, 16.0, 0.001) {
+		t.Errorf("TurnCycleSeconds.Mean: got %v want 16", tc.Mean)
+	}
+
+	// First response seconds, sorted = [10,30].
+	// percentileFloat: P50 idx=int(2*0.5)=1 → 30, P90 idx=1 → 30.
+	// Mean = (10+30)/2 = 20.
+	fr := stats.Velocity.FirstResponseSeconds
+	if fr.P50 != 30.0 {
+		t.Errorf("FirstResponseSeconds.P50: got %v want 30", fr.P50)
+	}
+	if fr.P90 != 30.0 {
+		t.Errorf("FirstResponseSeconds.P90: got %v want 30", fr.P90)
+	}
+	if !floatsClose(fr.Mean, 20.0, 0.001) {
+		t.Errorf("FirstResponseSeconds.Mean: got %v want 20", fr.Mean)
+	}
+
+	// MessagesPerActiveHour: active seconds=130, messages=10.
+	// activeMinutes = 130/60, per-hour = 10 / (activeMinutes/60)
+	//               = 10 * 60 / (130/60) = 36000/130 ≈ 276.923.
+	want := 36000.0 / 130.0
+	if !floatsClose(stats.Velocity.MessagesPerActiveHour, want, 0.01) {
+		t.Errorf("MessagesPerActiveHour: got %v want %v",
+			stats.Velocity.MessagesPerActiveHour, want)
+	}
+}

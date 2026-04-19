@@ -62,7 +62,39 @@ func (db *DB) GetSessionStats(
 	computeTotalsAndArchetypes(stats, rows)
 	computeDistributions(stats, rows)
 
+	sessionIDs := make([]string, 0, len(rows))
+	for _, r := range rows {
+		sessionIDs = append(sessionIDs, r.id)
+	}
+	accum, err := populateVelocityAccumulator(ctx, db, sessionIDs, tz)
+	if err != nil {
+		return nil, fmt.Errorf("populating velocity accumulator: %w", err)
+	}
+	computeVelocity(stats, accum)
+
 	return stats, nil
+}
+
+// computeVelocity fills SessionStats.Velocity from an already-populated
+// accumulator. The mean fields are computed over the same turnCycles
+// and firstResponses samples as the percentiles, so the two move
+// together — no extra filtering, no hidden sample drift.
+func computeVelocity(s *SessionStats, accum *velocityAccumulator) {
+	ov := accum.computeOverview()
+	s.Velocity.TurnCycleSeconds = StatsPercentiles{
+		P50:  ov.TurnCycleSec.P50,
+		P90:  ov.TurnCycleSec.P90,
+		Mean: accum.turnCycleMean(),
+	}
+	s.Velocity.FirstResponseSeconds = StatsPercentiles{
+		P50:  ov.FirstResponseSec.P50,
+		P90:  ov.FirstResponseSec.P90,
+		Mean: accum.firstResponseMean(),
+	}
+	if accum.activeMinutes > 0 {
+		s.Velocity.MessagesPerActiveHour =
+			float64(accum.totalMsgs) / (accum.activeMinutes / 60.0)
+	}
 }
 
 // resolveTimezone loads an IANA zone name, defaulting to UTC when
