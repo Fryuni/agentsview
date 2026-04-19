@@ -201,21 +201,29 @@ func (b *codexSessionBuilder) handleEventMsg(
 }
 
 // applyCodexTokenUsage normalizes Codex token usage fields
-// into the format expected by the usage query:
+// into the Anthropic-style shape expected by the usage and cost
+// queries. Codex reports input_tokens as the full input count
+// (cached portion included), while the downstream cost formula
+// treats input_tokens as the uncached remainder and bills
+// cache_read_input_tokens separately. Subtracting cached here
+// prevents double-counting the cached portion at the full input
+// rate.
 //
-//	input_tokens        → input_tokens
-//	output_tokens       → output_tokens
-//	cached_input_tokens → cache_read_input_tokens
+//	input_tokens - cached_input_tokens → input_tokens  (uncached)
+//	output_tokens                      → output_tokens
+//	cached_input_tokens                → cache_read_input_tokens
 func (b *codexSessionBuilder) applyCodexTokenUsage(
 	msg *ParsedMessage, raw string,
 ) {
 	usage := gjson.Parse(raw)
-	input := int(usage.Get("input_tokens").Int())
+	totalInput := int(usage.Get("input_tokens").Int())
 	cached := int(usage.Get("cached_input_tokens").Int())
 	output := int(usage.Get("output_tokens").Int())
 
+	uncached := max(totalInput-cached, 0)
+
 	normalized := map[string]int{
-		"input_tokens":            input,
+		"input_tokens":            uncached,
 		"output_tokens":           output,
 		"cache_read_input_tokens": cached,
 	}
@@ -226,8 +234,8 @@ func (b *codexSessionBuilder) applyCodexTokenUsage(
 	msg.TokenUsage = j
 	msg.OutputTokens = output
 	msg.HasOutputTokens = output > 0
-	msg.ContextTokens = input + cached
-	msg.HasContextTokens = input > 0 || cached > 0
+	msg.ContextTokens = uncached + cached
+	msg.HasContextTokens = totalInput > 0 || cached > 0
 }
 
 func (b *codexSessionBuilder) handleFunctionCall(

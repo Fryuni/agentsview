@@ -868,13 +868,16 @@ func TestParseCodexSession_TokenUsage(t *testing.T) {
 		// User message has no usage.
 		assert.Empty(t, msgs[0].TokenUsage)
 
-		// Assistant message has normalized usage.
+		// Assistant message has normalized usage. Codex reports
+		// input_tokens=10000 as the full input (cached included);
+		// after normalization the stored input_tokens is the
+		// uncached remainder (10000-6000=4000).
 		assert.NotEmpty(t, msgs[1].TokenUsage)
-		assert.Contains(t, string(msgs[1].TokenUsage), `"input_tokens":10000`)
+		assert.Contains(t, string(msgs[1].TokenUsage), `"input_tokens":4000`)
 		assert.Contains(t, string(msgs[1].TokenUsage), `"output_tokens":500`)
 		assert.Contains(t, string(msgs[1].TokenUsage), `"cache_read_input_tokens":6000`)
 		assert.Equal(t, 500, msgs[1].OutputTokens)
-		assert.Equal(t, 16000, msgs[1].ContextTokens) // 10000+6000
+		assert.Equal(t, 10000, msgs[1].ContextTokens) // 4000+6000
 		assert.True(t, msgs[1].HasOutputTokens)
 		assert.True(t, msgs[1].HasContextTokens)
 
@@ -882,7 +885,7 @@ func TestParseCodexSession_TokenUsage(t *testing.T) {
 		assert.True(t, sess.HasTotalOutputTokens)
 		assert.Equal(t, 500, sess.TotalOutputTokens)
 		assert.True(t, sess.HasPeakContextTokens)
-		assert.Equal(t, 16000, sess.PeakContextTokens)
+		assert.Equal(t, 10000, sess.PeakContextTokens)
 	})
 
 	t.Run("duplicate token_count events deduplicated", func(t *testing.T) {
@@ -916,17 +919,17 @@ func TestParseCodexSession_TokenUsage(t *testing.T) {
 		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
 		require.Len(t, msgs, 4)
 
-		// First assistant msg.
+		// First assistant msg (10000 total, 6000 cached).
 		assert.Equal(t, 500, msgs[1].OutputTokens)
-		assert.Equal(t, 16000, msgs[1].ContextTokens)
+		assert.Equal(t, 10000, msgs[1].ContextTokens)
 
-		// Second assistant msg.
+		// Second assistant msg (20000 total, 12000 cached).
 		assert.Equal(t, 800, msgs[3].OutputTokens)
-		assert.Equal(t, 32000, msgs[3].ContextTokens)
+		assert.Equal(t, 20000, msgs[3].ContextTokens)
 
 		// Session totals.
 		assert.Equal(t, 1300, sess.TotalOutputTokens)
-		assert.Equal(t, 32000, sess.PeakContextTokens)
+		assert.Equal(t, 20000, sess.PeakContextTokens)
 	})
 
 	t.Run("multiple API calls in one turn", func(t *testing.T) {

@@ -26,11 +26,12 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 14: thinking_text column + promoted system
-// subtypes (continuation, resume, interrupted,
-// task_notification, stop_hook) surfaced as first-class
-// system messages instead of being silently skipped.
-const dataVersion = 14
+// Bumped to 15: Codex parser now subtracts cached_input_tokens
+// from input_tokens before storing, matching the Anthropic
+// convention that downstream cost and usage queries assume.
+// Prior rows double-counted cached tokens at the full input
+// rate; re-parsing rewrites token_usage and context_tokens.
+const dataVersion = 15
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
