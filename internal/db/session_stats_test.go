@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -1303,6 +1304,286 @@ func TestGetSessionStats_AgentPortfolio_Empty(t *testing.T) {
 	}
 	if ap.Primary != "" {
 		t.Errorf("Primary: got %q want empty", ap.Primary)
+	}
+}
+
+// cacheTokenBreakdown names the four token dimensions the cache
+// economics section reads per assistant message.
+type cacheTokenBreakdown struct {
+	input         int
+	output        int
+	cacheCreation int
+	cacheRead     int
+}
+
+// seedCacheEconomicsMessage inserts one assistant message whose
+// token_usage JSON carries a full input/output/cache_* breakdown.
+// The helper lives next to seedModelMessages so cache-economics tests
+// can set the four cache-dimension counts directly without teaching
+// seedModelMessages about fields it doesn't use.
+func seedCacheEconomicsMessage(
+	t *testing.T, d *DB, sessionID string, ordinal int,
+	model string, b cacheTokenBreakdown,
+) {
+	t.Helper()
+	payload := fmt.Sprintf(
+		`{"input_tokens":%d,"output_tokens":%d,`+
+			`"cache_creation_input_tokens":%d,`+
+			`"cache_read_input_tokens":%d}`,
+		b.input, b.output, b.cacheCreation, b.cacheRead,
+	)
+	m := asstMsg(sessionID, ordinal, "reply")
+	m.Model = model
+	m.OutputTokens = b.output
+	m.HasOutputTokens = true
+	m.TokenUsage = json.RawMessage(payload)
+	if err := d.InsertMessages([]Message{m}); err != nil {
+		t.Fatalf("seedCacheEconomicsMessage %s ord=%d: %v",
+			sessionID, ordinal, err)
+	}
+}
+
+// TestGetSessionStats_CacheEconomics exercises the cache-economics
+// computation end-to-end: three Claude sessions with known token
+// mixes across two models, one codex session that must NOT affect
+// the output (cache economics is Claude-only). The test locks the
+// weighted-mean overall rule, the bucket assignment, and the two
+// dollar calculations against hand-computed values.
+func TestGetSessionStats_CacheEconomics(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	if err := d.UpsertModelPricing([]ModelPricing{
+		{
+			ModelPattern:         "claude-opus-4-7",
+			InputPerMTok:         15.0,
+			OutputPerMTok:        75.0,
+			CacheCreationPerMTok: 18.75,
+			CacheReadPerMTok:     1.5,
+		},
+		{
+			ModelPattern:         "claude-sonnet-4-6",
+			InputPerMTok:         3.0,
+			OutputPerMTok:        15.0,
+			CacheCreationPerMTok: 3.75,
+			CacheReadPerMTok:     0.3,
+		},
+	}); err != nil {
+		t.Fatalf("UpsertModelPricing: %v", err)
+	}
+
+	// ce1 (opus): ratio = 9000 / (1000+9000+100) = 9000/10100 ≈ 0.8911
+	// → cacheHitRatioEdges bucket 3 ([0.75, 0.95)).
+	insertSessionFixture(t, d, sessionFixture{
+		id: "ce1", agent: "claude", userMsgs: 3,
+		startedAt: hoursAgo(5),
+	})
+	seedCacheEconomicsMessage(t, d, "ce1", 1, "claude-opus-4-7",
+		cacheTokenBreakdown{
+			input: 1000, output: 500,
+			cacheCreation: 100, cacheRead: 9000,
+		})
+
+	// ce2 (sonnet): ratio = 3000/(500+3000+50) = 3000/3550 ≈ 0.8451
+	// → bucket 3.
+	insertSessionFixture(t, d, sessionFixture{
+		id: "ce2", agent: "claude", userMsgs: 3,
+		startedAt: hoursAgo(4),
+	})
+	seedCacheEconomicsMessage(t, d, "ce2", 1, "claude-sonnet-4-6",
+		cacheTokenBreakdown{
+			input: 500, output: 200,
+			cacheCreation: 50, cacheRead: 3000,
+		})
+
+	// ce3 (opus): ratio = 100/(100+100+0) = 0.5
+	// → bucket 2 ([0.5, 0.75)).
+	insertSessionFixture(t, d, sessionFixture{
+		id: "ce3", agent: "claude", userMsgs: 3,
+		startedAt: hoursAgo(3),
+	})
+	seedCacheEconomicsMessage(t, d, "ce3", 1, "claude-opus-4-7",
+		cacheTokenBreakdown{
+			input: 100, output: 50,
+			cacheCreation: 0, cacheRead: 100,
+		})
+
+	// Codex session with non-empty token_usage: must NOT influence
+	// any cache_economics number (section is Claude-only).
+	insertSessionFixture(t, d, sessionFixture{
+		id: "cx1", agent: "codex", userMsgs: 3,
+		startedAt: hoursAgo(2),
+	})
+	seedCacheEconomicsMessage(t, d, "cx1", 1, "gpt-5",
+		cacheTokenBreakdown{
+			input: 100000, output: 50000,
+			cacheCreation: 0, cacheRead: 0,
+		})
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+
+	ce := stats.CacheEconomics
+	if ce == nil {
+		t.Fatalf("CacheEconomics: got nil, want populated")
+	}
+	if !ce.ClaudeOnly {
+		t.Errorf("ClaudeOnly: got false, want true")
+	}
+
+	// Overall = sum(cache_read) / sum(denominator) (weighted mean).
+	// = (9000 + 3000 + 100) / (10100 + 3550 + 200)
+	// = 12100 / 13850 ≈ 0.873646.
+	wantOverall := 12100.0 / 13850.0
+	if !floatsClose(ce.CacheHitRatio.Overall, wantOverall, 1e-6) {
+		t.Errorf("CacheHitRatio.Overall: got %v want %v",
+			ce.CacheHitRatio.Overall, wantOverall)
+	}
+
+	wantBuckets := []int{0, 0, 1, 2, 0}
+	if len(ce.CacheHitRatio.Buckets) != len(wantBuckets) {
+		t.Fatalf("CacheHitRatio.Buckets: got %d buckets want %d",
+			len(ce.CacheHitRatio.Buckets), len(wantBuckets))
+	}
+	for i, w := range wantBuckets {
+		if ce.CacheHitRatio.Buckets[i].Count != w {
+			t.Errorf("CacheHitRatio.Buckets[%d]: got %d want %d",
+				i, ce.CacheHitRatio.Buckets[i].Count, w)
+		}
+	}
+
+	// Per-message cost (rates in $/MTok, so divide by 1e6):
+	//   ce1 opus = (1000*15 + 500*75 + 100*18.75 + 9000*1.5)/1e6
+	//           = (15000 + 37500 + 1875 + 13500)/1e6 = 0.067875
+	//   ce2 sonn = (500*3 + 200*15 + 50*3.75 + 3000*0.3)/1e6
+	//           = (1500 + 3000 + 187.5 + 900)/1e6 = 0.0055875
+	//   ce3 opus = (100*15 + 50*75 + 0 + 100*1.5)/1e6
+	//           = (1500 + 3750 + 150)/1e6 = 0.0054
+	wantSpent := 0.067875 + 0.0055875 + 0.0054
+	if !floatsClose(ce.DollarsSpent, wantSpent, 1e-9) {
+		t.Errorf("DollarsSpent: got %v want %v",
+			ce.DollarsSpent, wantSpent)
+	}
+
+	// cost_without_cache reprices (input + cache_read) at input rate
+	// and zeroes cache_creation, keeping output unchanged.
+	//   ce1 opus = (15*(1000+9000) + 75*500)/1e6
+	//           = (150000 + 37500)/1e6 = 0.1875
+	//   ce2 sonn = (3*(500+3000) + 15*200)/1e6
+	//           = (10500 + 3000)/1e6 = 0.0135
+	//   ce3 opus = (15*(100+100) + 75*50)/1e6
+	//           = (3000 + 3750)/1e6 = 0.00675
+	wantWithoutCache := 0.1875 + 0.0135 + 0.00675
+	wantSavings := wantWithoutCache - wantSpent
+	if !floatsClose(ce.DollarsSavedVsUncached, wantSavings, 1e-9) {
+		t.Errorf("DollarsSavedVsUncached: got %v want %v",
+			ce.DollarsSavedVsUncached, wantSavings)
+	}
+	if ce.DollarsSavedVsUncached < 0 {
+		t.Errorf("DollarsSavedVsUncached must be non-negative: got %v",
+			ce.DollarsSavedVsUncached)
+	}
+}
+
+// TestGetSessionStats_CacheEconomics_NoClaude verifies that the
+// pointer remains nil when the window contains zero Claude sessions.
+// A zero-valued *StatsCacheEconomics would emit "claude_only":false,
+// "overall":0, etc. — false negatives the profile page would render
+// as a legitimate empty cache-economics section.
+func TestGetSessionStats_CacheEconomics_NoClaude(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Pricing is present so the nil result isn't an artifact of a
+	// missing pricing map.
+	if err := d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern: "claude-sonnet-4-6",
+		InputPerMTok: 3.0, OutputPerMTok: 15.0,
+		CacheCreationPerMTok: 3.75, CacheReadPerMTok: 0.3,
+	}}); err != nil {
+		t.Fatalf("UpsertModelPricing: %v", err)
+	}
+
+	insertSessionFixture(t, d, sessionFixture{
+		id: "cx1", agent: "codex", userMsgs: 3,
+		startedAt: hoursAgo(2),
+	})
+	seedCacheEconomicsMessage(t, d, "cx1", 1, "gpt-5",
+		cacheTokenBreakdown{input: 1000, output: 500})
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+	if stats.CacheEconomics != nil {
+		t.Errorf("CacheEconomics: got %+v want nil",
+			stats.CacheEconomics)
+	}
+}
+
+// TestGetSessionStats_CacheEconomics_ZeroDenominatorSkipped seeds one
+// Claude session whose only message has zero input/cache tokens. The
+// per-session ratio denominator is zero so the session must be
+// skipped from both the histogram and the overall weighted mean,
+// without tripping the nil-vs-populated rule.
+func TestGetSessionStats_CacheEconomics_ZeroDenominatorSkipped(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	if err := d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern: "claude-opus-4-7",
+		InputPerMTok: 15.0, OutputPerMTok: 75.0,
+		CacheCreationPerMTok: 18.75, CacheReadPerMTok: 1.5,
+	}}); err != nil {
+		t.Fatalf("UpsertModelPricing: %v", err)
+	}
+
+	// Session with a contributing denominator.
+	insertSessionFixture(t, d, sessionFixture{
+		id: "ok", agent: "claude", userMsgs: 3,
+		startedAt: hoursAgo(3),
+	})
+	seedCacheEconomicsMessage(t, d, "ok", 1, "claude-opus-4-7",
+		cacheTokenBreakdown{
+			input: 100, output: 50, cacheRead: 300,
+		})
+
+	// Session with zero denominator — must be skipped from the
+	// histogram, not crash on divide-by-zero.
+	insertSessionFixture(t, d, sessionFixture{
+		id: "z", agent: "claude", userMsgs: 3,
+		startedAt: hoursAgo(2),
+	})
+	seedCacheEconomicsMessage(t, d, "z", 1, "claude-opus-4-7",
+		cacheTokenBreakdown{input: 0, output: 10, cacheRead: 0})
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+	ce := stats.CacheEconomics
+	if ce == nil {
+		t.Fatalf("CacheEconomics: got nil want populated")
+	}
+	// Only "ok" contributes: ratio = 300 / (100+300) = 0.75 → bucket 3.
+	total := 0
+	for _, b := range ce.CacheHitRatio.Buckets {
+		total += b.Count
+	}
+	if total != 1 {
+		t.Errorf("histogram total: got %d want 1 (zero-denom skipped)",
+			total)
+	}
+	if ce.CacheHitRatio.Buckets[3].Count != 1 {
+		t.Errorf("bucket 3 [0.75,0.95): got %d want 1",
+			ce.CacheHitRatio.Buckets[3].Count)
+	}
+	// Overall = 300/400 = 0.75 exactly (zero-denom session excluded
+	// from both numerator and denominator).
+	if !floatsClose(ce.CacheHitRatio.Overall, 0.75, 1e-9) {
+		t.Errorf("Overall: got %v want 0.75", ce.CacheHitRatio.Overall)
 	}
 }
 

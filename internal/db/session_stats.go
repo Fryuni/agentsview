@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tidwall/gjson"
 )
 
 // StatsFilter mirrors the service-layer StatsFilter but lives in db
@@ -23,9 +25,8 @@ type StatsFilter struct {
 }
 
 // GetSessionStats computes the v1 session-stats JSON response.
-// Sections not yet wired (adoption, cache_economics, temporal,
-// outcomes) remain at their zero values until the tasks that
-// implement them land.
+// Sections not yet wired (adoption, temporal, outcomes) remain at
+// their zero values until the tasks that implement them land.
 func (db *DB) GetSessionStats(
 	ctx context.Context, f StatsFilter,
 ) (*SessionStats, error) {
@@ -81,6 +82,12 @@ func (db *DB) GetSessionStats(
 	}
 
 	computeAgentPortfolio(stats, rows)
+
+	if err := db.computeCacheEconomics(ctx, stats, rows); err != nil {
+		return nil, fmt.Errorf(
+			"computing cache economics: %w", err,
+		)
+	}
 
 	return stats, nil
 }
@@ -710,4 +717,188 @@ func pickPrimaryAgent(bySessions map[string]int) string {
 		}
 	}
 	return best
+}
+
+// sessionCacheTotals accumulates the denominator tokens (input +
+// cache_read + cache_creation) that drive the per-session ratio, plus
+// the dollar figures for one Claude session. Output tokens don't feed
+// the ratio and are baked directly into dollars* as they're parsed,
+// so they're intentionally not kept on the struct.
+type sessionCacheTotals struct {
+	inputTok     int64
+	cacheCreateT int64
+	cacheReadT   int64
+	dollarsSpent float64
+	dollarsNoCac float64 // cost if the workload had never cached
+}
+
+// computeCacheEconomics populates stats.CacheEconomics for Claude
+// sessions in the window. The field is a nullable pointer — it is
+// left nil whenever rows contains no agent="claude" session so the
+// JSON output stays absent for non-Claude workloads (see spec:
+// "Section 6 hidden if cache_economics absent").
+//
+// Overall hit ratio is the weighted mean of cache_read over
+// (input + cache_read + cache_creation), weighted by each session's
+// denominator (equivalently: sum(cache_read)/sum(denominator) across
+// sessions with a nonzero denominator). The spec's aggregator rule
+// for merging cache_hit_ratio across machines is a weighted mean
+// over the same denominator, so computing the single-machine number
+// the same way keeps merge semantics stable.
+//
+// dollars_spent prices every eligible Claude message using the
+// model_pricing table. dollars_saved_vs_uncached reprices cache_read
+// tokens at the input rate and zeroes cache_creation (the
+// counterfactual where the workload never cached), then subtracts
+// dollars_spent. A missing pricing row zeroes out that model's
+// contribution — the same graceful-degrade behaviour as GetDailyUsage.
+func (db *DB) computeCacheEconomics(
+	ctx context.Context, stats *SessionStats,
+	rows []sessionStatsRow,
+) error {
+	claudeIDs := collectClaudeSessionIDs(rows)
+	if len(claudeIDs) == 0 {
+		return nil
+	}
+
+	pricing, err := db.loadPricingMap(ctx)
+	if err != nil {
+		return fmt.Errorf("loading pricing: %w", err)
+	}
+
+	perSession := make(map[string]*sessionCacheTotals, len(claudeIDs))
+	if err := queryChunked(claudeIDs,
+		func(chunk []string) error {
+			return db.accumulateCacheTotals(
+				ctx, chunk, pricing, perSession,
+			)
+		}); err != nil {
+		return err
+	}
+
+	ce := &StatsCacheEconomics{
+		ClaudeOnly: true,
+		CacheHitRatio: CacheHitRatioDistribution{
+			Buckets: buildEmptyBuckets(cacheHitRatioEdges),
+		},
+	}
+	var (
+		cacheReadSum   int64
+		denominatorSum int64
+		dollarsSpent   float64
+		dollarsNoCache float64
+	)
+	for _, totals := range perSession {
+		denom := totals.inputTok + totals.cacheReadT +
+			totals.cacheCreateT
+		dollarsSpent += totals.dollarsSpent
+		dollarsNoCache += totals.dollarsNoCac
+		if denom <= 0 {
+			continue
+		}
+		cacheReadSum += totals.cacheReadT
+		denominatorSum += denom
+		ratio := float64(totals.cacheReadT) / float64(denom)
+		addBucket(ce.CacheHitRatio.Buckets,
+			cacheHitRatioEdges, ratio)
+	}
+	if denominatorSum > 0 {
+		ce.CacheHitRatio.Overall =
+			float64(cacheReadSum) / float64(denominatorSum)
+	}
+	ce.DollarsSpent = dollarsSpent
+	savings := dollarsNoCache - dollarsSpent
+	if savings < 0 {
+		// Savings can only go negative via pricing anomalies (e.g.
+		// cache_read rate greater than input rate). Clamp to zero so
+		// downstream rendering never shows "you paid more to cache".
+		savings = 0
+	}
+	ce.DollarsSavedVsUncached = savings
+
+	stats.CacheEconomics = ce
+	return nil
+}
+
+// collectClaudeSessionIDs filters sessionStatsRow to the Claude-agent
+// subset used by the cache_economics query. Kept as a helper so the
+// caller reads as "build the list, run the query".
+func collectClaudeSessionIDs(rows []sessionStatsRow) []string {
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		if r.agent == "claude" {
+			out = append(out, r.id)
+		}
+	}
+	return out
+}
+
+// accumulateCacheTotals folds one chunk of Claude session IDs into
+// perSession. Messages with empty token_usage or empty model are
+// skipped — they match usageMessageEligibility's filter and keep the
+// dollar numbers consistent with GetDailyUsage.
+func (db *DB) accumulateCacheTotals(
+	ctx context.Context, sessionIDs []string,
+	pricing map[string]modelRates,
+	perSession map[string]*sessionCacheTotals,
+) error {
+	ph, args := inPlaceholders(sessionIDs)
+	q := `SELECT session_id, model, token_usage
+		FROM messages
+		WHERE session_id IN ` + ph + `
+			AND token_usage != ''
+			AND model != ''
+			AND model != '<synthetic>'`
+	sqlRows, err := db.getReader().QueryContext(ctx, q, args...)
+	if err != nil {
+		return fmt.Errorf("querying cache tokens: %w", err)
+	}
+	defer sqlRows.Close()
+	for sqlRows.Next() {
+		var sessionID, model, tokenJSON string
+		if err := sqlRows.Scan(
+			&sessionID, &model, &tokenJSON,
+		); err != nil {
+			return fmt.Errorf("scanning cache tokens: %w", err)
+		}
+		addMessageToCacheTotals(
+			perSession, sessionID, model, tokenJSON, pricing,
+		)
+	}
+	return sqlRows.Err()
+}
+
+// addMessageToCacheTotals parses one message's token_usage JSON and
+// folds its contribution into perSession. Split out of
+// accumulateCacheTotals so the row loop stays a thin scan+dispatch.
+func addMessageToCacheTotals(
+	perSession map[string]*sessionCacheTotals,
+	sessionID, model, tokenJSON string,
+	pricing map[string]modelRates,
+) {
+	usage := gjson.Parse(tokenJSON)
+	inputTok := usage.Get("input_tokens").Int()
+	outputTok := usage.Get("output_tokens").Int()
+	cacheCrTok := usage.Get("cache_creation_input_tokens").Int()
+	cacheRdTok := usage.Get("cache_read_input_tokens").Int()
+
+	totals, ok := perSession[sessionID]
+	if !ok {
+		totals = &sessionCacheTotals{}
+		perSession[sessionID] = totals
+	}
+	totals.inputTok += inputTok
+	totals.cacheCreateT += cacheCrTok
+	totals.cacheReadT += cacheRdTok
+
+	rates := pricing[model]
+	totals.dollarsSpent += (float64(inputTok)*rates.input +
+		float64(outputTok)*rates.output +
+		float64(cacheCrTok)*rates.cacheCreation +
+		float64(cacheRdTok)*rates.cacheRead) / 1_000_000
+	// Uncached counterfactual: no cache_creation cost, and
+	// cache_read tokens re-billed at the regular input rate.
+	totals.dollarsNoCac += (float64(inputTok)*rates.input +
+		float64(outputTok)*rates.output +
+		float64(cacheRdTok)*rates.input) / 1_000_000
 }
