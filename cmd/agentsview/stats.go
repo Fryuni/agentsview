@@ -3,14 +3,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/wesm/agentsview/internal/config"
@@ -20,8 +23,8 @@ import (
 
 func newStatsCommand() *cobra.Command {
 	var (
-		since, until, agent, timezone, ghToken string
-		includeProjects, excludeProjects       []string
+		since, until, agent, timezone    string
+		includeProjects, excludeProjects []string
 	)
 	cmd := &cobra.Command{
 		Use:          "stats",
@@ -35,14 +38,6 @@ func newStatsCommand() *cobra.Command {
 				return err
 			}
 			defer cleanup()
-
-			if ghToken == "" {
-				// Fall back to env; spec: GH_TOKEN or GITHUB_TOKEN.
-				ghToken = os.Getenv("GH_TOKEN")
-				if ghToken == "" {
-					ghToken = os.Getenv("GITHUB_TOKEN")
-				}
-			}
 
 			// "all" is the human-facing default and echoes through to
 			// stats.Filters.Agent, but the db layer treats any non-empty
@@ -60,7 +55,7 @@ func newStatsCommand() *cobra.Command {
 				IncludeProjects: includeProjects,
 				ExcludeProjects: excludeProjects,
 				Timezone:        timezone,
-				GHToken:         ghToken,
+				GHToken:         resolveGitHubToken(cmd.Context()),
 			})
 			if err != nil {
 				return err
@@ -75,10 +70,34 @@ func newStatsCommand() *cobra.Command {
 	cmd.Flags().String("format", "human",
 		"Output format: human or json")
 	registerStatsFlags(cmd,
-		&since, &until, &agent, &timezone, &ghToken,
+		&since, &until, &agent, &timezone,
 		&includeProjects, &excludeProjects,
 	)
 	return cmd
+}
+
+// resolveGitHubToken returns a token for `gh search` aggregation,
+// preferring AGENTSVIEW_GITHUB_TOKEN (an app-scoped secret) and
+// falling back to whatever `gh auth token` prints. Returns "" when
+// neither source yields a token; the stats pipeline interprets that
+// as "skip PR aggregation" rather than an error.
+//
+// The flag-based path was removed so the token never appears in
+// argv (visible to other local users via ps/proc/cmdline, and
+// commonly captured by CI logs and crash reporters).
+func resolveGitHubToken(ctx context.Context) string {
+	if t := strings.TrimSpace(os.Getenv("AGENTSVIEW_GITHUB_TOKEN")); t != "" {
+		return t
+	}
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(cctx, "gh", "auth", "token")
+	cmd.Stderr = io.Discard
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // registerStatsFlags wires the `agentsview stats` flags onto cmd. Split
@@ -86,7 +105,7 @@ func newStatsCommand() *cobra.Command {
 // past the 100-line cap.
 func registerStatsFlags(
 	cmd *cobra.Command,
-	since, until, agent, timezone, ghToken *string,
+	since, until, agent, timezone *string,
 	includeProjects, excludeProjects *[]string,
 ) {
 	f := cmd.Flags()
@@ -102,8 +121,6 @@ func registerStatsFlags(
 		"Exclude these projects (repeatable)")
 	f.StringVar(timezone, "timezone", "",
 		"Timezone for temporal (default: local system timezone)")
-	f.StringVar(ghToken, "gh-token", "",
-		"GitHub token for PR aggregation (falls back to GH_TOKEN/GITHUB_TOKEN env)")
 }
 
 // openStatsService opens a SessionService scoped to the local SQLite
