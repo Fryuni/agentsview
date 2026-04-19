@@ -294,52 +294,133 @@ fn normalize_env_key(key: &std::ffi::OsStr, case_insensitive_keys: bool) -> OsSt
     key.to_os_string()
 }
 
-fn run_login_shell_env(shell: &str, timeout: Duration) -> Option<Vec<u8>> {
+/// LoginShellEnvError captures every way try_run_login_shell_env
+/// can fail so tests can print an actionable reason when the
+/// probe returns nothing. Production callers flatten this into
+/// `Option` via `.ok()` since they already fall back to parent
+/// env on any failure.
+#[derive(Debug)]
+enum LoginShellEnvError {
+    TempFile(io::Error),
+    Spawn(io::Error),
+    Wait(io::Error),
+    Timeout {
+        elapsed: Duration,
+    },
+    NonZero {
+        code: Option<i32>,
+        stdout_len: usize,
+        stderr: Vec<u8>,
+    },
+    ReadStdout(io::Error),
+}
+
+impl std::fmt::Display for LoginShellEnvError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TempFile(e) => write!(f, "tempfile create/clone failed: {e}"),
+            Self::Spawn(e) => write!(f, "spawn failed: {e}"),
+            Self::Wait(e) => write!(f, "try_wait failed: {e}"),
+            Self::Timeout { elapsed } => write!(f, "timed out after {elapsed:?}"),
+            Self::NonZero {
+                code,
+                stdout_len,
+                stderr,
+            } => {
+                let stderr_str = String::from_utf8_lossy(stderr);
+                write!(
+                    f,
+                    "child exited non-zero code={code:?} stdout_len={stdout_len} \
+                     stderr={stderr_str:?}"
+                )
+            }
+            Self::ReadStdout(e) => write!(f, "reading stdout tempfile failed: {e}"),
+        }
+    }
+}
+
+/// try_run_login_shell_env spawns `shell -<login-flag> "env -0"` and
+/// returns the captured stdout, or a structured error explaining why
+/// it couldn't. stdout is captured to a tempfile (not a pipe) so a
+/// child that emits more than a pipe buffer's worth of bytes never
+/// deadlocks. stderr is captured the same way so test failures can
+/// surface the shell's error output.
+fn try_run_login_shell_env(shell: &str, timeout: Duration) -> Result<Vec<u8>, LoginShellEnvError> {
     let shell_arg = shell_login_env_flag(shell);
-    let mut stdout_capture = tempfile::tempfile().ok()?;
-    let stdout_writer = stdout_capture.try_clone().ok()?;
+    let mut stdout_capture = tempfile::tempfile().map_err(LoginShellEnvError::TempFile)?;
+    let stdout_writer = stdout_capture
+        .try_clone()
+        .map_err(LoginShellEnvError::TempFile)?;
+    let mut stderr_capture = tempfile::tempfile().map_err(LoginShellEnvError::TempFile)?;
+    let stderr_writer = stderr_capture
+        .try_clone()
+        .map_err(LoginShellEnvError::TempFile)?;
     let mut child = std::process::Command::new(shell)
         .args([shell_arg, "env -0"])
         .stdin(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(stderr_writer))
         .stdout(Stdio::from(stdout_writer))
         .spawn()
-        .ok()?;
+        .map_err(LoginShellEnvError::Spawn)?;
 
-    let deadline = Instant::now() + timeout;
+    let started = Instant::now();
+    let deadline = started + timeout;
     let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => {
-                break status;
-            }
+            Ok(Some(status)) => break status,
             Ok(None) => {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return None;
+                    return Err(LoginShellEnvError::Timeout {
+                        elapsed: started.elapsed(),
+                    });
                 }
                 thread::sleep(Duration::from_millis(25));
             }
             Err(err) => {
-                eprintln!("[agentsview] login shell probe try_wait failed: {err}");
                 let _ = child.kill();
                 let _ = child.wait();
-                return None;
+                return Err(LoginShellEnvError::Wait(err));
             }
         }
     };
-    if !status.success() {
-        return None;
+
+    let mut output = Vec::new();
+    if let Err(e) = stdout_capture.seek(SeekFrom::Start(0)) {
+        return Err(LoginShellEnvError::ReadStdout(e));
+    }
+    if let Err(e) = stdout_capture.read_to_end(&mut output) {
+        return Err(LoginShellEnvError::ReadStdout(e));
     }
 
-    if stdout_capture.seek(SeekFrom::Start(0)).is_err() {
-        return None;
+    if !status.success() {
+        let mut stderr_bytes = Vec::new();
+        let _ = stderr_capture.seek(SeekFrom::Start(0));
+        let _ = stderr_capture.read_to_end(&mut stderr_bytes);
+        return Err(LoginShellEnvError::NonZero {
+            code: status.code(),
+            stdout_len: output.len(),
+            stderr: stderr_bytes,
+        });
     }
-    let mut output = Vec::new();
-    if stdout_capture.read_to_end(&mut output).is_err() {
-        return None;
+
+    Ok(output)
+}
+
+/// run_login_shell_env is the Option-returning facade used by
+/// production code, which treats any probe failure as "no login
+/// shell env available" and falls back to the parent environment.
+/// Tests that need a failure reason should call
+/// try_run_login_shell_env directly.
+fn run_login_shell_env(shell: &str, timeout: Duration) -> Option<Vec<u8>> {
+    match try_run_login_shell_env(shell, timeout) {
+        Ok(bytes) => Some(bytes),
+        Err(err) => {
+            eprintln!("[agentsview] login shell env probe failed: {err}");
+            None
+        }
     }
-    Some(output)
 }
 
 fn shell_login_env_flag(shell: &str) -> &'static str {
@@ -1288,16 +1369,19 @@ mod tests {
         fs::set_permissions(&script_path, perms).expect("set executable permissions");
 
         // 10s gives slow ARM64 CI runners headroom; the script
-        // itself completes in milliseconds.
-        let output = run_login_shell_env(
+        // itself completes in milliseconds. Call the
+        // Result-returning variant so a CI flake prints the real
+        // reason (spawn error, non-zero exit + stderr, timeout,
+        // etc.) instead of an opaque "returned None".
+        let result = try_run_login_shell_env(
             script_path.to_str().expect("script path utf-8"),
             Duration::from_secs(10),
         );
         let removed = fs::remove_file(&script_path);
 
-        let output = output.unwrap_or_else(|| {
+        let output = result.unwrap_or_else(|err| {
             panic!(
-                "run_login_shell_env returned None\n\
+                "try_run_login_shell_env failed: {err}\n\
                  script_path={script_path:?} (removed={removed:?})\n\
                  script_body={script_body:?}"
             )
@@ -1328,14 +1412,17 @@ mod tests {
         fs::set_permissions(&script_path, perms).expect("set executable permissions");
 
         let started = Instant::now();
-        let output = run_login_shell_env(
+        let result = try_run_login_shell_env(
             script_path.to_str().expect("script path utf-8"),
             Duration::from_millis(120),
         );
         let elapsed = started.elapsed();
         let _ = fs::remove_file(&script_path);
 
-        assert!(output.is_none(), "timeout path should return None");
+        match result {
+            Err(LoginShellEnvError::Timeout { .. }) => {}
+            other => panic!("expected Timeout error; got {other:?}"),
+        }
         assert!(
             elapsed < Duration::from_secs(1),
             "timeout path took too long: {elapsed:?}"
@@ -1359,5 +1446,62 @@ mod tests {
             Duration::from_millis(100),
         );
         assert!(output.is_none(), "missing shell should return None");
+    }
+
+    #[test]
+    fn try_run_login_shell_env_reports_spawn_error_when_shell_missing() {
+        let result = try_run_login_shell_env(
+            "agentsview-missing-shell-binary",
+            Duration::from_millis(100),
+        );
+        match result {
+            Err(LoginShellEnvError::Spawn(_)) => {}
+            other => panic!("expected Spawn error; got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn try_run_login_shell_env_reports_non_zero_with_stderr() {
+        // Script that writes to stderr and exits non-zero, so we
+        // can confirm the NonZero variant carries both the code
+        // and the captured stderr. Future CI flakes in the large-
+        // stdout test will surface the same info.
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("valid clock")
+            .as_nanos();
+        let script_path = std::env::temp_dir().join(format!(
+            "agentsview-login-shell-fail-{stamp}-{}.sh",
+            std::process::id()
+        ));
+        fs::write(&script_path, "#!/bin/sh\necho diag-stderr >&2\nexit 42\n")
+            .expect("write shell script");
+        let mut perms = fs::metadata(&script_path)
+            .expect("read shell script metadata")
+            .permissions();
+        perms.set_mode(0o700);
+        fs::set_permissions(&script_path, perms).expect("set executable permissions");
+
+        let result = try_run_login_shell_env(
+            script_path.to_str().expect("script path utf-8"),
+            Duration::from_secs(2),
+        );
+        let _ = fs::remove_file(&script_path);
+
+        match result {
+            Err(LoginShellEnvError::NonZero {
+                code: Some(42),
+                stderr,
+                ..
+            }) => {
+                let s = String::from_utf8_lossy(&stderr);
+                assert!(
+                    s.contains("diag-stderr"),
+                    "stderr should be captured; got {s:?}"
+                );
+            }
+            other => panic!("expected NonZero{{code=42}}; got {other:?}"),
+        }
     }
 }
