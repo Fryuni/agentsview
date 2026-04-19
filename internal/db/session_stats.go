@@ -27,8 +27,8 @@ type StatsFilter struct {
 }
 
 // GetSessionStats computes the v1 session-stats JSON response.
-// Sections not yet wired (adoption, temporal, outcomes) remain at
-// their zero values until the tasks that implement them land.
+// Sections not yet wired (adoption) remain at their zero values
+// until the tasks that implement them land.
 func (db *DB) GetSessionStats(
 	ctx context.Context, f StatsFilter,
 ) (*SessionStats, error) {
@@ -96,6 +96,8 @@ func (db *DB) GetSessionStats(
 	); err != nil {
 		return nil, fmt.Errorf("computing temporal: %w", err)
 	}
+
+	computeOutcomes(stats, rows)
 
 	return stats, nil
 }
@@ -336,6 +338,14 @@ type sessionStatsRow struct {
 	hasPeakContext    bool
 	totalToolCalls    int
 	assistantTurns    int
+	// Outcome-section fields. Populated from the sessions table via
+	// loadSessionsInWindow; consumed by computeOutcomes. Empty strings
+	// for outcome/healthGrade denote "no signal recorded yet".
+	outcome         string
+	healthGrade     string
+	toolRetryCount  int
+	compactionCount int
+	editChurnCount  int
 }
 
 // loadSessionsInWindow returns the rows the stats pipeline needs.
@@ -399,7 +409,9 @@ func (db *DB) loadSessionsInWindow(
 			WHERE tc.session_id = s.id), 0) AS total_tool_calls,
 		COALESCE((SELECT COUNT(*) FROM messages m
 			WHERE m.session_id = s.id AND m.role = 'assistant'),
-			0) AS assistant_turns
+			0) AS assistant_turns,
+		s.outcome, COALESCE(s.health_grade, ''),
+		s.tool_retry_count, s.compaction_count, s.edit_churn_count
 		FROM sessions s WHERE ` + strings.Join(preds, " AND ")
 
 	sqlRows, err := db.getReader().QueryContext(ctx, query, args...)
@@ -423,6 +435,8 @@ func (db *DB) loadSessionsInWindow(
 			&r.totalOutputTokens, &r.peakContextTokens,
 			&hasPeak,
 			&r.totalToolCalls, &r.assistantTurns,
+			&r.outcome, &r.healthGrade,
+			&r.toolRetryCount, &r.compactionCount, &r.editChurnCount,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"scanning session stats row: %w", err,
@@ -1039,4 +1053,72 @@ func reporterTimezone(f StatsFilter) string {
 		return tz
 	}
 	return time.Local.String()
+}
+
+// computeOutcomes populates stats.Outcomes from the Claude-agent subset
+// of rows. The pointer stays nil when the window contains no Claude
+// sessions so the JSON output stays absent for pure non-Claude
+// workloads (matching the cache_economics convention: omitempty + nil).
+//
+// Unknown counts every session whose outcome isn't the literal
+// "success" or "failure" — including the schema default "unknown" and
+// any legacy empty string. GradeDistribution is always allocated as a
+// non-nil map so the JSON emits "grade_distribution": {} rather than
+// null when no session has a grade yet; empty health_grade values are
+// skipped so the map never carries a "" key.
+//
+// Rates are guarded against division by zero:
+//
+//   - ToolRetryRate is zero when the Claude subset had no tool calls at
+//     all. Without that guard a window with retries but no (counted)
+//     tool calls would divide by zero (NaN), which JSON cannot encode.
+//   - CompactionsPerSession / AvgEditChurn are guarded too, though
+//     len(claudeRows) == 0 already short-circuits Outcomes to nil; the
+//     guard is paranoia against future refactors.
+func computeOutcomes(s *SessionStats, rows []sessionStatsRow) {
+	var claudeRows []sessionStatsRow
+	for _, r := range rows {
+		if r.agent == "claude" {
+			claudeRows = append(claudeRows, r)
+		}
+	}
+	if len(claudeRows) == 0 {
+		return
+	}
+	out := &StatsOutcomes{
+		ClaudeOnly:        true,
+		GradeDistribution: map[string]int{},
+	}
+	totalTools := 0
+	totalRetries := 0
+	totalCompactions := 0
+	totalChurn := 0
+	for _, r := range claudeRows {
+		switch r.outcome {
+		case "success":
+			out.Success++
+		case "failure":
+			out.Failure++
+		default:
+			out.Unknown++
+		}
+		if r.healthGrade != "" {
+			out.GradeDistribution[r.healthGrade]++
+		}
+		totalTools += r.totalToolCalls
+		totalRetries += r.toolRetryCount
+		totalCompactions += r.compactionCount
+		totalChurn += r.editChurnCount
+	}
+	if totalTools > 0 {
+		out.ToolRetryRate = float64(totalRetries) /
+			float64(totalTools)
+	}
+	if len(claudeRows) > 0 {
+		out.CompactionsPerSession = float64(totalCompactions) /
+			float64(len(claudeRows))
+		out.AvgEditChurn = float64(totalChurn) /
+			float64(len(claudeRows))
+	}
+	s.Outcomes = out
 }

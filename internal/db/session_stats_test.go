@@ -2084,3 +2084,187 @@ func TestGetSessionStats_Temporal_SkipsEmptyTimestamps(t *testing.T) {
 			got.UserMessages)
 	}
 }
+
+// TestGetSessionStats_Outcomes_Happy seeds four Claude sessions with a
+// mix of outcomes, health grades, retries, compactions, and churn, then
+// asserts every field on StatsOutcomes. Tool calls are seeded via
+// seedAssistantActivity so the ToolRetryRate denominator matches the
+// totalToolCalls the loader projects from tool_calls.
+func TestGetSessionStats_Outcomes_Happy(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// s-a: success / grade A / 2 tools / 1 retry / 1 compaction / 2 churn
+	insertSessionFixture(t, d, sessionFixture{
+		id: "s-a", userMsgs: 4, startedAt: hoursAgo(5),
+		totalToolCalls: 2, assistantTurns: 2,
+	})
+	updateSignals(t, d, "s-a", SessionSignalUpdate{
+		Outcome:         "success",
+		HealthGrade:     Ptr("A"),
+		ToolRetryCount:  1,
+		CompactionCount: 1,
+		EditChurnCount:  2,
+	})
+
+	// s-b: failure / grade C / 4 tools / 2 retries / 0 compactions / 4 churn
+	insertSessionFixture(t, d, sessionFixture{
+		id: "s-b", userMsgs: 6, startedAt: hoursAgo(4),
+		totalToolCalls: 4, assistantTurns: 3,
+	})
+	updateSignals(t, d, "s-b", SessionSignalUpdate{
+		Outcome:         "failure",
+		HealthGrade:     Ptr("C"),
+		ToolRetryCount:  2,
+		CompactionCount: 0,
+		EditChurnCount:  4,
+	})
+
+	// s-c: success / grade B / 2 tools / 0 retries / 2 compactions / 0 churn
+	insertSessionFixture(t, d, sessionFixture{
+		id: "s-c", userMsgs: 3, startedAt: hoursAgo(3),
+		totalToolCalls: 2, assistantTurns: 2,
+	})
+	updateSignals(t, d, "s-c", SessionSignalUpdate{
+		Outcome:         "success",
+		HealthGrade:     Ptr("B"),
+		ToolRetryCount:  0,
+		CompactionCount: 2,
+		EditChurnCount:  0,
+	})
+
+	// s-d: unknown outcome / no grade / 2 tools / 1 retry /
+	// 1 compaction / 2 churn. Explicit "unknown" exercises the
+	// non-success/non-failure branch; the nil HealthGrade pointer
+	// must NOT add an entry to GradeDistribution.
+	insertSessionFixture(t, d, sessionFixture{
+		id: "s-d", userMsgs: 2, startedAt: hoursAgo(2),
+		totalToolCalls: 2, assistantTurns: 1,
+	})
+	updateSignals(t, d, "s-d", SessionSignalUpdate{
+		Outcome:         "unknown",
+		HealthGrade:     nil,
+		ToolRetryCount:  1,
+		CompactionCount: 1,
+		EditChurnCount:  2,
+	})
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+	out := stats.Outcomes
+	if out == nil {
+		t.Fatalf("Outcomes: got nil want populated")
+	}
+	if !out.ClaudeOnly {
+		t.Errorf("ClaudeOnly: got false want true")
+	}
+	if out.Success != 2 {
+		t.Errorf("Success: got %d want 2", out.Success)
+	}
+	if out.Failure != 1 {
+		t.Errorf("Failure: got %d want 1", out.Failure)
+	}
+	if out.Unknown != 1 {
+		t.Errorf("Unknown: got %d want 1", out.Unknown)
+	}
+	if out.GradeDistribution == nil {
+		t.Fatalf("GradeDistribution: got nil want non-nil")
+	}
+	wantGrades := map[string]int{"A": 1, "B": 1, "C": 1}
+	if len(out.GradeDistribution) != len(wantGrades) {
+		t.Errorf("GradeDistribution size: got %d want %d (%+v)",
+			len(out.GradeDistribution), len(wantGrades),
+			out.GradeDistribution)
+	}
+	for grade, want := range wantGrades {
+		if got := out.GradeDistribution[grade]; got != want {
+			t.Errorf("GradeDistribution[%q]: got %d want %d",
+				grade, got, want)
+		}
+	}
+	if _, hasEmpty := out.GradeDistribution[""]; hasEmpty {
+		t.Errorf("GradeDistribution: empty-string key present (%+v)",
+			out.GradeDistribution)
+	}
+	// ToolRetryRate = (1+2+0+1) / (2+4+2+2) = 4/10 = 0.4
+	if !floatsClose(out.ToolRetryRate, 0.4, 1e-9) {
+		t.Errorf("ToolRetryRate: got %v want 0.4", out.ToolRetryRate)
+	}
+	// CompactionsPerSession = (1+0+2+1) / 4 = 1.0
+	if !floatsClose(out.CompactionsPerSession, 1.0, 1e-9) {
+		t.Errorf("CompactionsPerSession: got %v want 1.0",
+			out.CompactionsPerSession)
+	}
+	// AvgEditChurn = (2+4+0+2) / 4 = 2.0
+	if !floatsClose(out.AvgEditChurn, 2.0, 1e-9) {
+		t.Errorf("AvgEditChurn: got %v want 2.0", out.AvgEditChurn)
+	}
+}
+
+// TestGetSessionStats_Outcomes_NoClaude verifies that Outcomes stays
+// nil — NOT zero-valued — when the window contains zero Claude
+// sessions. A *StatsOutcomes with ClaudeOnly=false would misrepresent
+// a pure codex workload as having an outcome signal of all-zeroes.
+func TestGetSessionStats_Outcomes_NoClaude(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSessionFixture(t, d, sessionFixture{
+		id: "cx1", agent: "codex", userMsgs: 3, startedAt: hoursAgo(2),
+	})
+	updateSignals(t, d, "cx1", SessionSignalUpdate{
+		Outcome:        "success",
+		HealthGrade:    Ptr("A"),
+		ToolRetryCount: 5,
+	})
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+	if stats.Outcomes != nil {
+		t.Errorf("Outcomes: got %+v want nil", stats.Outcomes)
+	}
+}
+
+// TestGetSessionStats_Outcomes_NoGrade verifies that a Claude session
+// with an empty health_grade still produces a populated Outcomes
+// pointer, with a non-nil empty GradeDistribution map (not nil) and
+// zeroed rates when no tools were recorded.
+func TestGetSessionStats_Outcomes_NoGrade(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSessionFixture(t, d, sessionFixture{
+		id: "ng", userMsgs: 2, startedAt: hoursAgo(2),
+	})
+	updateSignals(t, d, "ng", SessionSignalUpdate{
+		Outcome: "success",
+		// HealthGrade left nil — stored as NULL, loaded as "".
+	})
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+	out := stats.Outcomes
+	if out == nil {
+		t.Fatalf("Outcomes: got nil want populated")
+	}
+	if out.GradeDistribution == nil {
+		t.Errorf("GradeDistribution: got nil want empty map")
+	}
+	if len(out.GradeDistribution) != 0 {
+		t.Errorf("GradeDistribution: got %+v want empty",
+			out.GradeDistribution)
+	}
+	if out.ToolRetryRate != 0 {
+		t.Errorf("ToolRetryRate: got %v want 0 (no tools)",
+			out.ToolRetryRate)
+	}
+	if out.Success != 1 {
+		t.Errorf("Success: got %d want 1", out.Success)
+	}
+}
