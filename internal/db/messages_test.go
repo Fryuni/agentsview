@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestInsertAndGetMessage_ThinkingText(t *testing.T) {
@@ -149,6 +151,91 @@ func TestMigration_ThinkingTextColumn(t *testing.T) {
 		t.Errorf(
 			"ThinkingText = %q, want %q",
 			msgs[3].ThinkingText, "x",
+		)
+	}
+}
+
+// TestReplaceSessionMessages_LargeSession is a perf regression test
+// for the FTS5 trigger-cascade hang fixed alongside the bulk-delete
+// path in ReplaceSessionMessages. Before the fix, deleting a session
+// whose messages contained multi-MB content blobs would fan out into
+// per-row FTS 'delete' commands, each tokenizing the old content, and
+// could stall the writer for minutes on real data. The bulk path
+// makes the cost effectively flat regardless of blob size, so this
+// test puts a hard 10s ceiling on the full replace cycle for a
+// session that mixes 1000 small messages with one ~5MB content blob.
+// Skipped under -short since a clean run is well under 1s but CI
+// scheduling jitter can push slow paths up.
+func TestReplaceSessionMessages_LargeSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping perf test in -short mode")
+	}
+	t.Parallel()
+	d := testDB(t)
+	const sessionID = "perf-large"
+	insertSession(t, d, sessionID, "proj")
+
+	const n = 1000
+	msgs := make([]Message, 0, n)
+	for i := range n {
+		msgs = append(msgs, userMsg(sessionID, i, "small"))
+	}
+	// One ~5MB content blob in the middle of the stream — the
+	// pathological case that blew up the per-row FTS delete path.
+	big := strings.Repeat("x ", 5*1024*1024/2)
+	msgs[n/2] = Message{
+		SessionID:     sessionID,
+		Ordinal:       n / 2,
+		Role:          "assistant",
+		Content:       big,
+		ContentLength: len(big),
+		Timestamp:     tsZero,
+	}
+	insertMessages(t, d, msgs...)
+
+	// Replace with a different small set so the delete path has to
+	// remove all 1000 rows including the 5MB blob.
+	repl := make([]Message, 0, 10)
+	for i := range 10 {
+		repl = append(repl, userMsg(sessionID, i, "after"))
+	}
+	start := time.Now()
+	if err := d.ReplaceSessionMessages(sessionID, repl); err != nil {
+		t.Fatalf("ReplaceSessionMessages: %v", err)
+	}
+	elapsed := time.Since(start)
+	if elapsed > 10*time.Second {
+		t.Fatalf(
+			"ReplaceSessionMessages took %s, want < 10s "+
+				"(per-row FTS trigger regression?)",
+			elapsed.Round(time.Millisecond),
+		)
+	}
+
+	got, err := d.GetAllMessages(context.Background(), sessionID)
+	requireNoError(t, err, "GetAllMessages after replace")
+	if len(got) != len(repl) {
+		t.Fatalf(
+			"after replace got %d messages, want %d",
+			len(got), len(repl),
+		)
+	}
+
+	// Verify the FTS index was actually scrubbed: count rows in
+	// messages_fts that join back to the (now-deleted) original
+	// session rows. Should be zero. If the messages_ad trigger
+	// restoration failed silently or the bulk-delete INSERT...SELECT
+	// got skipped, stale tokens would still resolve here.
+	var leaked int
+	err = d.getReader().QueryRow(
+		`SELECT count(*) FROM messages_fts
+		 WHERE messages_fts MATCH 'xxx'`,
+	).Scan(&leaked)
+	requireNoError(t, err, "fts leak check")
+	if leaked != 0 {
+		t.Fatalf(
+			"FTS still contains %d rows matching 'xxx' from deleted blob",
+			leaked,
 		)
 	}
 }

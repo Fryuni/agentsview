@@ -467,10 +467,51 @@ func (db *DB) ReplaceSessionMessages(
 		)
 	}
 
+	// FTS5 is optional (the module may be missing in the runtime).
+	// Probe sqlite_master so the bulk-delete + trigger-swap dance
+	// only runs when there's actually an FTS table to maintain.
+	var ftsCount int
+	if err := tx.QueryRow(
+		`SELECT count(*) FROM sqlite_master
+		 WHERE type='table' AND name='messages_fts'`,
+	).Scan(&ftsCount); err != nil {
+		return fmt.Errorf("probing fts table: %w", err)
+	}
+	hasFTS := ftsCount > 0
+
+	if hasFTS {
+		// Bulk-delete the FTS index entries up-front in a single SQL
+		// statement, then drop the per-row messages_ad trigger so the
+		// upcoming DELETE FROM messages doesn't re-fire the FTS5
+		// 'delete' command for every row. With large sessions
+		// (thousands of rows where a single content blob can be many
+		// MB) the per-row trigger path is dominated by FTS
+		// tokenization and stalls the writer for minutes; the bulk
+		// INSERT...SELECT path is effectively flat. The trigger is
+		// restored before the transaction is allowed to commit.
+		if _, err := tx.Exec(
+			`INSERT INTO messages_fts(messages_fts, rowid, content)
+			 SELECT 'delete', id, content
+			 FROM messages WHERE session_id = ?`,
+			sessionID,
+		); err != nil {
+			return fmt.Errorf("bulk-deleting fts entries: %w", err)
+		}
+		if _, err := tx.Exec(
+			"DROP TRIGGER IF EXISTS messages_ad",
+		); err != nil {
+			return fmt.Errorf("dropping messages_ad trigger: %w", err)
+		}
+	}
 	if _, err := tx.Exec(
 		"DELETE FROM messages WHERE session_id = ?", sessionID,
 	); err != nil {
 		return fmt.Errorf("deleting old messages: %w", err)
+	}
+	if hasFTS {
+		if _, err := tx.Exec(messagesADTriggerDDL); err != nil {
+			return fmt.Errorf("restoring messages_ad trigger: %w", err)
+		}
 	}
 
 	if len(msgs) > 0 {
