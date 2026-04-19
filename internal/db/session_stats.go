@@ -1060,21 +1060,22 @@ func reporterTimezone(f StatsFilter) string {
 // sessions so the JSON output stays absent for pure non-Claude
 // workloads (matching the cache_economics convention: omitempty + nil).
 //
-// Unknown counts every session whose outcome isn't the literal
-// "success" or "failure" — including the schema default "unknown" and
-// any legacy empty string. GradeDistribution is always allocated as a
-// non-nil map so the JSON emits "grade_distribution": {} rather than
-// null when no session has a grade yet; empty health_grade values are
-// skipped so the map never carries a "" key.
+// The JSON contract exposes success/failure/unknown buckets, but
+// agentsview's sessions.outcome column uses a different vocabulary
+// ("completed" / "abandoned" / "errored" / "unknown" — see
+// internal/signals/outcome.go). The switch below maps the stored
+// vocabulary onto the contract. Unknown counts the schema default
+// "unknown" plus any legacy empty string or future additions.
+// GradeDistribution is always allocated as a non-nil map so the JSON
+// emits "grade_distribution": {} rather than null when no session has
+// a grade yet; empty health_grade values are skipped so the map never
+// carries a "" key.
 //
-// Rates are guarded against division by zero:
-//
-//   - ToolRetryRate is zero when the Claude subset had no tool calls at
-//     all. Without that guard a window with retries but no (counted)
-//     tool calls would divide by zero (NaN), which JSON cannot encode.
-//   - CompactionsPerSession / AvgEditChurn are guarded too, though
-//     len(claudeRows) == 0 already short-circuits Outcomes to nil; the
-//     guard is paranoia against future refactors.
+// ToolRetryRate is guarded against division by zero — without that
+// guard a window with retries but no (counted) tool calls would divide
+// by zero (NaN), which JSON cannot encode. CompactionsPerSession and
+// AvgEditChurn do not need a guard because the early return above
+// guarantees len(claudeRows) > 0.
 func computeOutcomes(s *SessionStats, rows []sessionStatsRow) {
 	var claudeRows []sessionStatsRow
 	for _, r := range rows {
@@ -1094,12 +1095,18 @@ func computeOutcomes(s *SessionStats, rows []sessionStatsRow) {
 	totalCompactions := 0
 	totalChurn := 0
 	for _, r := range claudeRows {
+		// Map agentsview's outcome vocabulary (see
+		// internal/signals/outcome.go) onto the JSON contract's
+		// success/failure/unknown buckets. "completed" is the only
+		// positive outcome; "abandoned" and "errored" both indicate
+		// the session did not reach a clean finish.
 		switch r.outcome {
-		case "success":
+		case "completed":
 			out.Success++
-		case "failure":
+		case "abandoned", "errored":
 			out.Failure++
 		default:
+			// Covers "unknown", empty, and any future additions.
 			out.Unknown++
 		}
 		if r.healthGrade != "" {
@@ -1114,11 +1121,10 @@ func computeOutcomes(s *SessionStats, rows []sessionStatsRow) {
 		out.ToolRetryRate = float64(totalRetries) /
 			float64(totalTools)
 	}
-	if len(claudeRows) > 0 {
-		out.CompactionsPerSession = float64(totalCompactions) /
-			float64(len(claudeRows))
-		out.AvgEditChurn = float64(totalChurn) /
-			float64(len(claudeRows))
-	}
+	// len(claudeRows) > 0 is guaranteed by the early return above.
+	out.CompactionsPerSession = float64(totalCompactions) /
+		float64(len(claudeRows))
+	out.AvgEditChurn = float64(totalChurn) /
+		float64(len(claudeRows))
 	s.Outcomes = out
 }

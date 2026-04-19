@@ -2085,68 +2085,82 @@ func TestGetSessionStats_Temporal_SkipsEmptyTimestamps(t *testing.T) {
 	}
 }
 
-// TestGetSessionStats_Outcomes_Happy seeds four Claude sessions with a
-// mix of outcomes, health grades, retries, compactions, and churn, then
-// asserts every field on StatsOutcomes. Tool calls are seeded via
-// seedAssistantActivity so the ToolRetryRate denominator matches the
-// totalToolCalls the loader projects from tool_calls.
+// TestGetSessionStats_Outcomes_Happy seeds five Claude sessions spanning
+// the full outcome vocabulary that agentsview actually stores
+// ("completed", "abandoned", "errored", "unknown" — see
+// internal/signals/outcome.go) and asserts every field on StatsOutcomes.
+// Per-row tool/retry/compaction/churn values are deliberately asymmetric
+// (distinct sums: retries=7, compactions=10, churn=15) so a field-swap
+// regression in the loader or aggregator would be caught.
 func TestGetSessionStats_Outcomes_Happy(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
-	// s-a: success / grade A / 2 tools / 1 retry / 1 compaction / 2 churn
+	// s-a: completed / grade A / 2 tools / 1 retry / 3 compactions / 5 churn
 	insertSessionFixture(t, d, sessionFixture{
-		id: "s-a", userMsgs: 4, startedAt: hoursAgo(5),
+		id: "s-a", userMsgs: 4, startedAt: hoursAgo(6),
 		totalToolCalls: 2, assistantTurns: 2,
 	})
 	updateSignals(t, d, "s-a", SessionSignalUpdate{
-		Outcome:         "success",
+		Outcome:         "completed",
 		HealthGrade:     Ptr("A"),
 		ToolRetryCount:  1,
-		CompactionCount: 1,
-		EditChurnCount:  2,
+		CompactionCount: 3,
+		EditChurnCount:  5,
 	})
 
-	// s-b: failure / grade C / 4 tools / 2 retries / 0 compactions / 4 churn
+	// s-b: completed / grade B / 4 tools / 0 retries / 1 compaction / 0 churn
 	insertSessionFixture(t, d, sessionFixture{
-		id: "s-b", userMsgs: 6, startedAt: hoursAgo(4),
+		id: "s-b", userMsgs: 3, startedAt: hoursAgo(5),
 		totalToolCalls: 4, assistantTurns: 3,
 	})
 	updateSignals(t, d, "s-b", SessionSignalUpdate{
-		Outcome:         "failure",
+		Outcome:         "completed",
+		HealthGrade:     Ptr("B"),
+		ToolRetryCount:  0,
+		CompactionCount: 1,
+		EditChurnCount:  0,
+	})
+
+	// s-c: abandoned / grade C / 6 tools / 3 retries / 0 compactions / 4 churn
+	insertSessionFixture(t, d, sessionFixture{
+		id: "s-c", userMsgs: 6, startedAt: hoursAgo(4),
+		totalToolCalls: 6, assistantTurns: 4,
+	})
+	updateSignals(t, d, "s-c", SessionSignalUpdate{
+		Outcome:         "abandoned",
 		HealthGrade:     Ptr("C"),
-		ToolRetryCount:  2,
+		ToolRetryCount:  3,
 		CompactionCount: 0,
 		EditChurnCount:  4,
 	})
 
-	// s-c: success / grade B / 2 tools / 0 retries / 2 compactions / 0 churn
+	// s-d: errored / grade D / 8 tools / 2 retries / 2 compactions / 6 churn
 	insertSessionFixture(t, d, sessionFixture{
-		id: "s-c", userMsgs: 3, startedAt: hoursAgo(3),
-		totalToolCalls: 2, assistantTurns: 2,
-	})
-	updateSignals(t, d, "s-c", SessionSignalUpdate{
-		Outcome:         "success",
-		HealthGrade:     Ptr("B"),
-		ToolRetryCount:  0,
-		CompactionCount: 2,
-		EditChurnCount:  0,
-	})
-
-	// s-d: unknown outcome / no grade / 2 tools / 1 retry /
-	// 1 compaction / 2 churn. Explicit "unknown" exercises the
-	// non-success/non-failure branch; the nil HealthGrade pointer
-	// must NOT add an entry to GradeDistribution.
-	insertSessionFixture(t, d, sessionFixture{
-		id: "s-d", userMsgs: 2, startedAt: hoursAgo(2),
-		totalToolCalls: 2, assistantTurns: 1,
+		id: "s-d", userMsgs: 5, startedAt: hoursAgo(3),
+		totalToolCalls: 8, assistantTurns: 5,
 	})
 	updateSignals(t, d, "s-d", SessionSignalUpdate{
+		Outcome:         "errored",
+		HealthGrade:     Ptr("D"),
+		ToolRetryCount:  2,
+		CompactionCount: 2,
+		EditChurnCount:  6,
+	})
+
+	// s-e: unknown / no grade / 5 tools / 1 retry / 4 compactions / 0 churn.
+	// Explicit "unknown" exercises the default branch; the nil HealthGrade
+	// pointer must NOT add an entry to GradeDistribution.
+	insertSessionFixture(t, d, sessionFixture{
+		id: "s-e", userMsgs: 2, startedAt: hoursAgo(2),
+		totalToolCalls: 5, assistantTurns: 2,
+	})
+	updateSignals(t, d, "s-e", SessionSignalUpdate{
 		Outcome:         "unknown",
 		HealthGrade:     nil,
 		ToolRetryCount:  1,
-		CompactionCount: 1,
-		EditChurnCount:  2,
+		CompactionCount: 4,
+		EditChurnCount:  0,
 	})
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
@@ -2160,19 +2174,22 @@ func TestGetSessionStats_Outcomes_Happy(t *testing.T) {
 	if !out.ClaudeOnly {
 		t.Errorf("ClaudeOnly: got false want true")
 	}
+	// Two "completed" -> Success.
 	if out.Success != 2 {
 		t.Errorf("Success: got %d want 2", out.Success)
 	}
-	if out.Failure != 1 {
-		t.Errorf("Failure: got %d want 1", out.Failure)
+	// One "abandoned" + one "errored" -> Failure.
+	if out.Failure != 2 {
+		t.Errorf("Failure: got %d want 2", out.Failure)
 	}
+	// One explicit "unknown" -> Unknown.
 	if out.Unknown != 1 {
 		t.Errorf("Unknown: got %d want 1", out.Unknown)
 	}
 	if out.GradeDistribution == nil {
 		t.Fatalf("GradeDistribution: got nil want non-nil")
 	}
-	wantGrades := map[string]int{"A": 1, "B": 1, "C": 1}
+	wantGrades := map[string]int{"A": 1, "B": 1, "C": 1, "D": 1}
 	if len(out.GradeDistribution) != len(wantGrades) {
 		t.Errorf("GradeDistribution size: got %d want %d (%+v)",
 			len(out.GradeDistribution), len(wantGrades),
@@ -2188,18 +2205,18 @@ func TestGetSessionStats_Outcomes_Happy(t *testing.T) {
 		t.Errorf("GradeDistribution: empty-string key present (%+v)",
 			out.GradeDistribution)
 	}
-	// ToolRetryRate = (1+2+0+1) / (2+4+2+2) = 4/10 = 0.4
-	if !floatsClose(out.ToolRetryRate, 0.4, 1e-9) {
-		t.Errorf("ToolRetryRate: got %v want 0.4", out.ToolRetryRate)
+	// ToolRetryRate = (1+0+3+2+1) / (2+4+6+8+5) = 7/25 = 0.28
+	if !floatsClose(out.ToolRetryRate, 0.28, 1e-9) {
+		t.Errorf("ToolRetryRate: got %v want 0.28", out.ToolRetryRate)
 	}
-	// CompactionsPerSession = (1+0+2+1) / 4 = 1.0
-	if !floatsClose(out.CompactionsPerSession, 1.0, 1e-9) {
-		t.Errorf("CompactionsPerSession: got %v want 1.0",
+	// CompactionsPerSession = (3+1+0+2+4) / 5 = 10/5 = 2.0
+	if !floatsClose(out.CompactionsPerSession, 2.0, 1e-9) {
+		t.Errorf("CompactionsPerSession: got %v want 2.0",
 			out.CompactionsPerSession)
 	}
-	// AvgEditChurn = (2+4+0+2) / 4 = 2.0
-	if !floatsClose(out.AvgEditChurn, 2.0, 1e-9) {
-		t.Errorf("AvgEditChurn: got %v want 2.0", out.AvgEditChurn)
+	// AvgEditChurn = (5+0+4+6+0) / 5 = 15/5 = 3.0
+	if !floatsClose(out.AvgEditChurn, 3.0, 1e-9) {
+		t.Errorf("AvgEditChurn: got %v want 3.0", out.AvgEditChurn)
 	}
 }
 
@@ -2215,7 +2232,7 @@ func TestGetSessionStats_Outcomes_NoClaude(t *testing.T) {
 		id: "cx1", agent: "codex", userMsgs: 3, startedAt: hoursAgo(2),
 	})
 	updateSignals(t, d, "cx1", SessionSignalUpdate{
-		Outcome:        "success",
+		Outcome:        "completed",
 		HealthGrade:    Ptr("A"),
 		ToolRetryCount: 5,
 	})
@@ -2241,7 +2258,7 @@ func TestGetSessionStats_Outcomes_NoGrade(t *testing.T) {
 		id: "ng", userMsgs: 2, startedAt: hoursAgo(2),
 	})
 	updateSignals(t, d, "ng", SessionSignalUpdate{
-		Outcome: "success",
+		Outcome: "completed",
 		// HealthGrade left nil — stored as NULL, loaded as "".
 	})
 
