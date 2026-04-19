@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 )
@@ -1633,5 +1634,453 @@ func TestPickPrimaryAgent(t *testing.T) {
 					c.input, got, c.want)
 			}
 		})
+	}
+}
+
+// hoursAgoAt returns an RFC3339 timestamp for (now - hours, shifted to
+// the given minute and second of that hour). Used by temporal tests
+// that need to place messages inside a specific UTC hour boundary.
+func hoursAgoAt(hours, minute, second int) string {
+	t := time.Now().UTC().
+		Add(-time.Duration(hours) * time.Hour).
+		Truncate(time.Hour).
+		Add(time.Duration(minute) * time.Minute).
+		Add(time.Duration(second) * time.Second)
+	return t.Format(time.RFC3339)
+}
+
+// utcHourBoundary returns the UTC-hour-boundary TS string (what
+// Temporal.HourlyUTC entries use) for (now - hours).
+func utcHourBoundary(hours int) string {
+	t := time.Now().UTC().
+		Add(-time.Duration(hours) * time.Hour).
+		Truncate(time.Hour)
+	return t.Format("2006-01-02T15:00:00Z")
+}
+
+// findHourlyUTC returns the entry matching ts, or nil when absent.
+// Shared by every temporal test that checks per-hour numbers.
+func findHourlyUTC(
+	entries []TemporalHourlyUTCEntry, ts string,
+) *TemporalHourlyUTCEntry {
+	for i := range entries {
+		if entries[i].TS == ts {
+			return &entries[i]
+		}
+	}
+	return nil
+}
+
+func TestGetSessionStats_Temporal_HourlyGrouping(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Three hours of activity: H-5 (2 user msgs in one session),
+	// H-4 (1 user msg in a different session), H-3 (2 user msgs
+	// across two sessions). Assistant messages are ignored.
+	insertSessionFixture(t, d, sessionFixture{
+		id: "s1", userMsgs: 2, startedAt: hoursAgo(6),
+	})
+	insertSessionFixture(t, d, sessionFixture{
+		id: "s2", userMsgs: 1, startedAt: hoursAgo(5),
+	})
+	insertSessionFixture(t, d, sessionFixture{
+		id: "s3", userMsgs: 1, startedAt: hoursAgo(4),
+	})
+	insertSessionFixture(t, d, sessionFixture{
+		id: "s4", userMsgs: 1, startedAt: hoursAgo(4),
+	})
+	insertMessages(t, d,
+		userMsgAt("s1", 0, "a", hoursAgoAt(5, 5, 0)),
+		userMsgAt("s1", 1, "b", hoursAgoAt(5, 45, 0)),
+		asstMsgAt("s1", 2, "ignored", hoursAgoAt(5, 50, 0)),
+		userMsgAt("s2", 0, "c", hoursAgoAt(4, 10, 0)),
+		userMsgAt("s3", 0, "d", hoursAgoAt(3, 30, 0)),
+		userMsgAt("s4", 0, "e", hoursAgoAt(3, 45, 0)),
+	)
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+	hours := stats.Temporal.HourlyUTC
+	if len(hours) != 3 {
+		t.Fatalf("hourly_utc: got %d entries want 3 (%+v)",
+			len(hours), hours)
+	}
+
+	// Entries must be sorted by TS ascending.
+	for i := 1; i < len(hours); i++ {
+		if hours[i-1].TS >= hours[i].TS {
+			t.Errorf("hourly_utc not ascending: %q >= %q",
+				hours[i-1].TS, hours[i].TS)
+		}
+	}
+
+	// H-5: 2 user messages, 1 distinct session.
+	if e := findHourlyUTC(hours, utcHourBoundary(5)); e == nil {
+		t.Errorf("missing hour entry %q", utcHourBoundary(5))
+	} else {
+		if e.UserMessages != 2 {
+			t.Errorf("H-5 user_messages: got %d want 2",
+				e.UserMessages)
+		}
+		if e.Sessions != 1 {
+			t.Errorf("H-5 sessions: got %d want 1", e.Sessions)
+		}
+	}
+	// H-4: 1 user message, 1 session.
+	if e := findHourlyUTC(hours, utcHourBoundary(4)); e == nil {
+		t.Errorf("missing hour entry %q", utcHourBoundary(4))
+	} else {
+		if e.UserMessages != 1 {
+			t.Errorf("H-4 user_messages: got %d want 1",
+				e.UserMessages)
+		}
+		if e.Sessions != 1 {
+			t.Errorf("H-4 sessions: got %d want 1", e.Sessions)
+		}
+	}
+	// H-3: 2 user messages from 2 distinct sessions.
+	if e := findHourlyUTC(hours, utcHourBoundary(3)); e == nil {
+		t.Errorf("missing hour entry %q", utcHourBoundary(3))
+	} else {
+		if e.UserMessages != 2 {
+			t.Errorf("H-3 user_messages: got %d want 2",
+				e.UserMessages)
+		}
+		if e.Sessions != 2 {
+			t.Errorf("H-3 sessions: got %d want 2", e.Sessions)
+		}
+	}
+}
+
+func TestGetSessionStats_Temporal_MidnightBoundary(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Pick a fixed day inside the default 28d window and seed one
+	// message 1 second before midnight UTC and one 1 second after.
+	// They MUST land in different hour entries.
+	day := time.Now().UTC().
+		Add(-5 * 24 * time.Hour).Truncate(24 * time.Hour)
+	before := day.Add(23*time.Hour + 59*time.Minute + 59*time.Second)
+	after := day.Add(24 * time.Hour).Add(1 * time.Second)
+
+	insertSessionFixture(t, d, sessionFixture{
+		id: "s1", userMsgs: 2,
+		startedAt: before.Format(time.RFC3339),
+	})
+	insertMessages(t, d,
+		userMsgAt("s1", 0, "late", before.Format(time.RFC3339)),
+		userMsgAt("s1", 1, "early", after.Format(time.RFC3339)),
+	)
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+	beforeTS := before.Truncate(time.Hour).
+		Format("2006-01-02T15:00:00Z")
+	afterTS := after.Truncate(time.Hour).
+		Format("2006-01-02T15:00:00Z")
+	if beforeTS == afterTS {
+		t.Fatalf("test setup: before %q and after %q collapsed to "+
+			"the same hour", beforeTS, afterTS)
+	}
+	if e := findHourlyUTC(stats.Temporal.HourlyUTC, beforeTS); e == nil {
+		t.Errorf("missing before-midnight hour %q", beforeTS)
+	} else if e.UserMessages != 1 {
+		t.Errorf("before-midnight user_messages: got %d want 1",
+			e.UserMessages)
+	}
+	if e := findHourlyUTC(stats.Temporal.HourlyUTC, afterTS); e == nil {
+		t.Errorf("missing after-midnight hour %q", afterTS)
+	} else if e.UserMessages != 1 {
+		t.Errorf("after-midnight user_messages: got %d want 1",
+			e.UserMessages)
+	}
+}
+
+func TestGetSessionStats_Temporal_OutOfWindowExcluded(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// One session inside the window, one outside. With Since=2d, the
+	// out-of-window session should not contribute sessionIDs, so its
+	// messages are absent from hourly_utc even if their timestamps
+	// fall within the window-viewed hours.
+	insertSessionFixture(t, d, sessionFixture{
+		id: "in", userMsgs: 1, startedAt: hoursAgo(10),
+	})
+	insertSessionFixture(t, d, sessionFixture{
+		id: "out", userMsgs: 1,
+		// 40 days ago, well past Since=2d.
+		startedAt: time.Now().UTC().
+			Add(-40 * 24 * time.Hour).Format(time.RFC3339),
+	})
+	insertMessages(t, d,
+		userMsgAt("in", 0, "ok", hoursAgoAt(10, 0, 0)),
+		userMsgAt("out", 0, "nope",
+			hoursAgoAt(10, 30, 0)), // same hour as "in"
+	)
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "2d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+	// Exactly one hour bucket, with a single user message (from "in").
+	if len(stats.Temporal.HourlyUTC) != 1 {
+		t.Fatalf("hourly_utc: got %d entries want 1 (%+v)",
+			len(stats.Temporal.HourlyUTC), stats.Temporal.HourlyUTC)
+	}
+	got := stats.Temporal.HourlyUTC[0]
+	if got.UserMessages != 1 {
+		t.Errorf("in-window user_messages: got %d want 1",
+			got.UserMessages)
+	}
+	if got.Sessions != 1 {
+		t.Errorf("in-window sessions: got %d want 1", got.Sessions)
+	}
+}
+
+func TestGetSessionStats_Temporal_SessionsDistinctPerHour(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Same session sends 3 user messages in H-6 (counts as 1 session,
+	// 3 user_messages) and 1 user message in H-5 (counts as 1 session,
+	// 1 user_message). The session appears in both hour entries.
+	insertSessionFixture(t, d, sessionFixture{
+		id: "s1", userMsgs: 4, startedAt: hoursAgo(7),
+	})
+	insertMessages(t, d,
+		userMsgAt("s1", 0, "a", hoursAgoAt(6, 5, 0)),
+		userMsgAt("s1", 1, "b", hoursAgoAt(6, 25, 0)),
+		userMsgAt("s1", 2, "c", hoursAgoAt(6, 55, 0)),
+		userMsgAt("s1", 3, "d", hoursAgoAt(5, 15, 0)),
+	)
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+	if e := findHourlyUTC(
+		stats.Temporal.HourlyUTC, utcHourBoundary(6),
+	); e == nil {
+		t.Fatalf("missing H-6 entry")
+	} else {
+		if e.UserMessages != 3 {
+			t.Errorf("H-6 user_messages: got %d want 3",
+				e.UserMessages)
+		}
+		if e.Sessions != 1 {
+			t.Errorf(
+				"H-6 sessions (same session 3 msgs): got %d want 1",
+				e.Sessions,
+			)
+		}
+	}
+	if e := findHourlyUTC(
+		stats.Temporal.HourlyUTC, utcHourBoundary(5),
+	); e == nil {
+		t.Fatalf("missing H-5 entry")
+	} else {
+		if e.UserMessages != 1 {
+			t.Errorf("H-5 user_messages: got %d want 1",
+				e.UserMessages)
+		}
+		if e.Sessions != 1 {
+			t.Errorf("H-5 sessions: got %d want 1", e.Sessions)
+		}
+	}
+}
+
+func TestGetSessionStats_Temporal_EmptyWindowEmptySlice(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+	if stats.Temporal.HourlyUTC == nil {
+		t.Errorf(
+			"hourly_utc must be a non-nil empty slice, got nil",
+		)
+	}
+	if len(stats.Temporal.HourlyUTC) != 0 {
+		t.Errorf("hourly_utc: got len %d want 0",
+			len(stats.Temporal.HourlyUTC))
+	}
+	// Reporter timezone should still be populated (claim in the spec).
+	if stats.Temporal.ReporterTimezone == "" {
+		t.Errorf("reporter_timezone must be populated even when " +
+			"hourly_utc is empty")
+	}
+	// JSON encoding must emit [] not null.
+	raw, err := json.Marshal(stats.Temporal.HourlyUTC)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if string(raw) != "[]" {
+		t.Errorf("hourly_utc JSON: got %s want []", string(raw))
+	}
+}
+
+func TestGetSessionStats_Temporal_ReporterTimezone_FilterWins(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{
+		Since:    "28d",
+		Timezone: "America/New_York",
+	})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+	if got := stats.Temporal.ReporterTimezone; got != "America/New_York" {
+		t.Errorf("reporter_timezone: got %q want America/New_York",
+			got)
+	}
+}
+
+func TestReporterTimezone_Precedence(t *testing.T) {
+	prev, hadTZ := os.LookupEnv("TZ")
+	t.Cleanup(func() {
+		if hadTZ {
+			_ = os.Setenv("TZ", prev)
+		} else {
+			_ = os.Unsetenv("TZ")
+		}
+	})
+
+	// Filter wins over env.
+	if err := os.Setenv("TZ", "Europe/Berlin"); err != nil {
+		t.Fatalf("set TZ: %v", err)
+	}
+	if got := reporterTimezone(
+		StatsFilter{Timezone: "Asia/Tokyo"},
+	); got != "Asia/Tokyo" {
+		t.Errorf("filter wins: got %q want Asia/Tokyo", got)
+	}
+
+	// No filter → env wins.
+	if got := reporterTimezone(StatsFilter{}); got != "Europe/Berlin" {
+		t.Errorf("env wins: got %q want Europe/Berlin", got)
+	}
+
+	// No filter, no env → time.Local fallback.
+	if err := os.Unsetenv("TZ"); err != nil {
+		t.Fatalf("unset TZ: %v", err)
+	}
+	got := reporterTimezone(StatsFilter{})
+	if got == "" {
+		t.Errorf("time.Local fallback: got empty string")
+	}
+	if got != time.Local.String() {
+		t.Errorf("time.Local fallback: got %q want %q",
+			got, time.Local.String())
+	}
+}
+
+func TestGetSessionStats_Temporal_FilterByAgentFlowsThrough(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Two sessions, same hour, different agents. Filter=claude must
+	// leave the codex session's messages out of hourly_utc.
+	insertSessionFixture(t, d, sessionFixture{
+		id: "c1", agent: "claude", userMsgs: 1,
+		startedAt: hoursAgo(4),
+	})
+	insertSessionFixture(t, d, sessionFixture{
+		id: "x1", agent: "codex", userMsgs: 1,
+		startedAt: hoursAgo(4),
+	})
+	insertMessages(t, d,
+		userMsgAt("c1", 0, "hi", hoursAgoAt(3, 10, 0)),
+		userMsgAt("x1", 0, "hi", hoursAgoAt(3, 20, 0)),
+	)
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{
+		Since: "28d", Agent: "claude",
+	})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+	if e := findHourlyUTC(
+		stats.Temporal.HourlyUTC, utcHourBoundary(3),
+	); e == nil {
+		t.Fatalf("missing H-3 entry")
+	} else {
+		if e.UserMessages != 1 {
+			t.Errorf(
+				"filter=claude user_messages: got %d want 1",
+				e.UserMessages,
+			)
+		}
+		if e.Sessions != 1 {
+			t.Errorf("filter=claude sessions: got %d want 1",
+				e.Sessions)
+		}
+	}
+}
+
+func TestGetSessionStats_Temporal_IgnoresAssistantMessages(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Only assistant messages in a session — hourly_utc must be empty.
+	insertSessionFixture(t, d, sessionFixture{
+		id: "only-asst", userMsgs: 0, messageCount: 2,
+		startedAt: hoursAgo(3),
+	})
+	insertMessages(t, d,
+		asstMsgAt("only-asst", 0, "a", hoursAgoAt(2, 5, 0)),
+		asstMsgAt("only-asst", 1, "b", hoursAgoAt(2, 10, 0)),
+	)
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+	if len(stats.Temporal.HourlyUTC) != 0 {
+		t.Errorf(
+			"hourly_utc should be empty when only assistant msgs, "+
+				"got %+v",
+			stats.Temporal.HourlyUTC,
+		)
+	}
+}
+
+func TestGetSessionStats_Temporal_SkipsEmptyTimestamps(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// User message with empty timestamp must not bucket to epoch or
+	// anywhere else — strftime returns NULL for empty strings and we
+	// drop the row.
+	insertSessionFixture(t, d, sessionFixture{
+		id: "s1", userMsgs: 2, startedAt: hoursAgo(3),
+	})
+	insertMessages(t, d,
+		userMsgAt("s1", 0, "good", hoursAgoAt(2, 15, 0)),
+		userMsgAt("s1", 1, "blank", ""),
+	)
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+	if len(stats.Temporal.HourlyUTC) != 1 {
+		t.Fatalf(
+			"hourly_utc: got %d entries want 1 (%+v)",
+			len(stats.Temporal.HourlyUTC), stats.Temporal.HourlyUTC,
+		)
+	}
+	if got := stats.Temporal.HourlyUTC[0]; got.UserMessages != 1 {
+		t.Errorf("user_messages: got %d want 1 (blank skipped)",
+			got.UserMessages)
 	}
 }

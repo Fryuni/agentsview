@@ -5,6 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -87,6 +89,12 @@ func (db *DB) GetSessionStats(
 		return nil, fmt.Errorf(
 			"computing cache economics: %w", err,
 		)
+	}
+
+	if err := db.computeTemporal(
+		ctx, stats, f, sessionIDs,
+	); err != nil {
+		return nil, fmt.Errorf("computing temporal: %w", err)
 	}
 
 	return stats, nil
@@ -901,4 +909,134 @@ func addMessageToCacheTotals(
 	totals.dollarsNoCac += (float64(inputTok)*rates.input +
 		float64(outputTok)*rates.output +
 		float64(cacheRdTok)*rates.input) / 1_000_000
+}
+
+// computeTemporal fills stats.Temporal.HourlyUTC and ReporterTimezone.
+//
+// HourlyUTC groups user messages (role='user') by their UTC calendar
+// hour. Each entry reports the count of user messages in that hour and
+// the number of distinct sessions with at least one user message in
+// that hour. Hours with zero activity are omitted (sparse output).
+//
+// Window + agent + project filters apply transitively via sessionIDs —
+// the caller already filtered sessions via loadSessionsInWindow, so
+// restricting to session_id IN (...) inherits those predicates. An
+// empty sessionIDs slice short-circuits to an empty entry list without
+// touching the database.
+//
+// Entries are sorted by TS ascending. The slice is always non-nil so
+// the JSON output emits "hourly_utc": [] rather than null.
+//
+// ReporterTimezone reflects f.Timezone when set (honouring the CLI
+// --timezone flag), the TZ env var when present, or time.Local's name
+// otherwise. This is a best-effort IANA name; tooling that needs a
+// strict tzdata lookup should pass --timezone explicitly.
+func (db *DB) computeTemporal(
+	ctx context.Context, stats *SessionStats, f StatsFilter,
+	sessionIDs []string,
+) error {
+	stats.Temporal.HourlyUTC = []TemporalHourlyUTCEntry{}
+	stats.Temporal.ReporterTimezone = reporterTimezone(f)
+
+	if len(sessionIDs) == 0 {
+		return nil
+	}
+
+	perHour := map[string]*TemporalHourlyUTCEntry{}
+	if err := queryChunked(sessionIDs,
+		func(chunk []string) error {
+			return db.accumulateHourlyUTC(ctx, chunk, perHour)
+		}); err != nil {
+		return err
+	}
+
+	hours := make([]string, 0, len(perHour))
+	for h := range perHour {
+		hours = append(hours, h)
+	}
+	sort.Strings(hours)
+
+	out := make([]TemporalHourlyUTCEntry, 0, len(hours))
+	for _, h := range hours {
+		out = append(out, *perHour[h])
+	}
+	stats.Temporal.HourlyUTC = out
+	return nil
+}
+
+// accumulateHourlyUTC folds one chunk of session IDs into perHour.
+// Messages without a timestamp are skipped — strftime returns NULL for
+// empty strings, and we ignore the resulting row rather than bucketing
+// it into the epoch.
+//
+// Sessions-per-hour is a distinct count: a session sending many
+// messages in one hour counts once, but the same session appearing in
+// two hours contributes to both. queryChunked slices sessionIDs into
+// disjoint chunks, so a per-chunk seen-set is enough — no session ID
+// crosses chunk boundaries.
+func (db *DB) accumulateHourlyUTC(
+	ctx context.Context, sessionIDs []string,
+	perHour map[string]*TemporalHourlyUTCEntry,
+) error {
+	ph, args := inPlaceholders(sessionIDs)
+	q := `SELECT
+			strftime('%Y-%m-%dT%H:00:00Z', m.timestamp) AS utc_hour,
+			m.session_id
+		FROM messages m
+		WHERE m.session_id IN ` + ph + `
+			AND m.role = 'user'
+			AND m.timestamp IS NOT NULL
+			AND m.timestamp != ''`
+	rows, err := db.getReader().QueryContext(ctx, q, args...)
+	if err != nil {
+		return fmt.Errorf("querying temporal hourly_utc: %w", err)
+	}
+	defer rows.Close()
+	seen := map[string]map[string]struct{}{}
+	for rows.Next() {
+		var hour sql.NullString
+		var sessionID string
+		if err := rows.Scan(&hour, &sessionID); err != nil {
+			return fmt.Errorf("scanning hourly_utc: %w", err)
+		}
+		if !hour.Valid || hour.String == "" {
+			continue
+		}
+		entry, ok := perHour[hour.String]
+		if !ok {
+			entry = &TemporalHourlyUTCEntry{TS: hour.String}
+			perHour[hour.String] = entry
+		}
+		entry.UserMessages++
+		hourSeen, ok := seen[hour.String]
+		if !ok {
+			hourSeen = map[string]struct{}{}
+			seen[hour.String] = hourSeen
+		}
+		if _, dup := hourSeen[sessionID]; !dup {
+			hourSeen[sessionID] = struct{}{}
+			entry.Sessions++
+		}
+	}
+	return rows.Err()
+}
+
+// reporterTimezone picks the best-effort IANA name to record in
+// SessionStats.Temporal.ReporterTimezone. Precedence:
+//
+//  1. f.Timezone when non-empty — echoes the --timezone flag.
+//  2. TZ environment variable — what most Unix tools respect.
+//  3. time.Local.String() — may be "Local" on systems without /etc/localtime.
+//
+// This function is intentionally simple: it does not attempt tzdata
+// lookups or validate the result. Consumers that need a strict zone
+// pass --timezone explicitly and get the validated name back.
+func reporterTimezone(f StatsFilter) string {
+	if f.Timezone != "" {
+		return f.Timezone
+	}
+	if tz := os.Getenv("TZ"); tz != "" {
+		return tz
+	}
+	return time.Local.String()
 }
