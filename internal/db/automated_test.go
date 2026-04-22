@@ -172,6 +172,13 @@ func TestIsAutomatedSession(t *testing.T) {
 			"I need to generate a conversation about titles for my book.",
 			false,
 		},
+
+		// agentsview changelog generator (release tooling)
+		{
+			"AgentsviewChangelogGenerator",
+			"You are generating a changelog for agentsview version 0.23.2.\n\nIMPORTANT: Do NOT use any tools.",
+			true,
+		},
 	}
 
 	for _, tt := range tests {

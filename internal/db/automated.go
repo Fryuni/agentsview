@@ -9,7 +9,7 @@ import (
 // gates the one-time is_automated re-classification. Bump the
 // suffix whenever the classifier patterns change so existing
 // databases re-run the backfill on next open.
-const IsAutomatedBackfillMarker = "is_automated_backfill_v3"
+const IsAutomatedBackfillMarker = "is_automated_backfill_v4"
 
 // automatedPrefixes are first_message prefixes that identify
 // automated (roborev) sessions. Matched case-sensitively.
@@ -30,6 +30,7 @@ var automatedPrefixes = []string{
 	"# Fix Request",
 	"You are a helpful assistant working on a software project.",
 	"You are combining multiple code review outputs into a single GitHub PR comment.",
+	"You are generating a changelog for agentsview",
 }
 
 // automatedSubstrings are patterns matched anywhere in the
