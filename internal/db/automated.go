@@ -2,6 +2,12 @@ package db
 
 import "strings"
 
+// IsAutomatedBackfillMarker is the stats/sync_metadata key that
+// gates the one-time is_automated re-classification. Bump the
+// suffix whenever the classifier patterns change so existing
+// databases re-run the backfill on next open.
+const IsAutomatedBackfillMarker = "is_automated_backfill_v2"
+
 // automatedPrefixes are first_message prefixes that identify
 // automated (roborev) sessions. Matched case-sensitively.
 // Combined with the single-turn gate (user_message_count <= 1)

@@ -572,7 +572,7 @@ func (db *DB) createPartialIndexesLocked(w *sql.DB) error {
 // Guarded by a stats marker so it only runs once per pattern
 // version.
 func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
-	const marker = "is_automated_backfill_v2"
+	const marker = IsAutomatedBackfillMarker
 	var done int
 	if err := w.QueryRow(
 		`SELECT count(*) FROM stats
