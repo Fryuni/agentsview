@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestBackfillIsAutomatedBidirectional(t *testing.T) {
@@ -105,5 +106,64 @@ func TestBackfillIsAutomatedMarkerIdempotent(t *testing.T) {
 	requireNoError(t, err, "get review")
 	if review.IsAutomated {
 		t.Error("second run should be no-op; is_automated should still be 0")
+	}
+}
+
+func TestBackfillIsAutomatedBumpsLocalModifiedAt(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Seed a single-turn roborev session that the new classifier
+	// will flip to is_automated = 1.
+	insertSession(t, d, "to-flip", "proj", func(s *Session) {
+		fm := "You are a code reviewer. Review the code."
+		s.FirstMessage = &fm
+		s.MessageCount = 3
+		s.UserMessageCount = 1
+	})
+	// Force is_automated = 0 so the backfill has work to do.
+	_, err := d.getWriter().Exec(
+		"UPDATE sessions SET is_automated = 0 WHERE id = 'to-flip'",
+	)
+	requireNoError(t, err, "force to-flip to 0")
+
+	// Snapshot local_modified_at before the backfill.
+	before, err := d.GetSessionFull(ctx, "to-flip")
+	requireNoError(t, err, "get to-flip before")
+	var beforeLM string
+	if before.LocalModifiedAt != nil {
+		beforeLM = *before.LocalModifiedAt
+	}
+
+	// SQLite's strftime('now') ticks at millisecond precision.
+	// Sleep a few ms so a re-set produces a strictly later value.
+	// (Mirrors internal/db/signals_test.go:164.)
+	time.Sleep(5 * time.Millisecond)
+
+	// Clear the marker so the backfill runs.
+	_, err = d.getWriter().Exec(
+		"DELETE FROM stats WHERE key = ?",
+		IsAutomatedBackfillMarker,
+	)
+	requireNoError(t, err, "clear marker")
+
+	d.mu.Lock()
+	err = d.backfillIsAutomatedLocked(d.getWriter())
+	d.mu.Unlock()
+	requireNoError(t, err, "backfill run")
+
+	after, err := d.GetSessionFull(ctx, "to-flip")
+	requireNoError(t, err, "get to-flip after")
+	if !after.IsAutomated {
+		t.Fatal("to-flip should be automated after backfill")
+	}
+	if after.LocalModifiedAt == nil || *after.LocalModifiedAt == "" {
+		t.Fatal("local_modified_at not set after backfill")
+	}
+	if *after.LocalModifiedAt <= beforeLM {
+		t.Errorf(
+			"local_modified_at not bumped: before=%q after=%q",
+			beforeLM, *after.LocalModifiedAt,
+		)
 	}
 }

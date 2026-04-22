@@ -664,7 +664,9 @@ func batchUpdateAutomated(
 			phs[j] = "?"
 		}
 		_, err := w.Exec(
-			"UPDATE sessions SET is_automated = ?"+
+			"UPDATE sessions"+
+				" SET is_automated = ?,"+
+				"     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')"+
 				" WHERE id IN ("+
 				strings.Join(phs, ",")+
 				")",
