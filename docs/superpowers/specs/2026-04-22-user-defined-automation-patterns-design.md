@@ -83,15 +83,13 @@ prefixes = [
 ]
 ```
 
-Normalization at load (in `config.Load` after TOML unmarshalling):
-
-- `strings.TrimSpace` each entry.
-- Drop entries that become empty after trimming.
-- Drop pattern entries longer than 1024 characters; log at warning level.
-- Drop within-list duplicates (preserving first occurrence).
-- Drop entries that exactly equal a built-in prefix; log at info level. This
-  keeps the merged set tight and signals to the user that the pattern is already
-  covered.
+Config does **no** semantic normalization. It only parses the TOML into the
+struct above and surfaces parse errors. All normalization (trim, drop empty,
+length cap, dedupe, drop built-in overlap) lives in `SetUserAutomationPrefixes`
+inside `internal/db`, where the built-in slices are accessible without exporting
+them. This keeps `internal/config` from depending on classifier internals — the
+only contract config has with `internal/db` is "here is the raw user-supplied
+list."
 
 If `[automated]` is absent or has no entries, `Automated.Prefixes` is nil and
 the classifier is unchanged from current behavior.
@@ -106,13 +104,49 @@ var (
     userPrefixes   []string
 )
 
-// SetUserAutomationPrefixes replaces the user-pattern slice.
-// The caller may pass nil to clear. Each entry is assumed to be
-// pre-normalized by the caller (config layer enforces this).
-func SetUserAutomationPrefixes(prefixes []string) {
+// SetUserAutomationPrefixes replaces the user-pattern slice with
+// a normalized copy of the input. Normalization (trim, drop
+// empty, length cap, dedupe within input, drop entries that
+// equal a built-in prefix) happens here so callers can pass the
+// raw list straight from config. Pass nil to clear.
+//
+// Returned int is the number of input entries that survived
+// normalization; intended for the caller to log a one-line
+// summary at startup. The function itself does not log.
+func SetUserAutomationPrefixes(prefixes []string) int {
+    cleaned := normalizeUserPrefixes(prefixes)
     userPrefixesMu.Lock()
     defer userPrefixesMu.Unlock()
-    userPrefixes = append([]string(nil), prefixes...)
+    userPrefixes = cleaned
+    return len(cleaned)
+}
+
+// normalizeUserPrefixes applies the validation rules from the
+// "Validation behavior" section. Built-in overlap check uses the
+// package-private automatedPrefixes slice directly — no exported
+// helper needed.
+func normalizeUserPrefixes(in []string) []string {
+    const maxLen = 1024
+    seen := make(map[string]struct{}, len(in))
+    out := make([]string, 0, len(in))
+    for _, raw := range in {
+        s := strings.TrimSpace(raw)
+        if s == "" || len(s) > maxLen {
+            continue
+        }
+        if _, dup := seen[s]; dup {
+            continue
+        }
+        if slices.Contains(automatedPrefixes, s) {
+            continue
+        }
+        seen[s] = struct{}{}
+        out = append(out, s)
+    }
+    if len(out) == 0 {
+        return nil
+    }
+    return out
 }
 
 // UserAutomationPrefixes returns a copy of the current slice.
@@ -123,6 +157,10 @@ func UserAutomationPrefixes() []string {
     return append([]string(nil), userPrefixes...)
 }
 ```
+
+`applyClassifierConfig` (in `cmd/agentsview/classifier_wiring.go`) handles the
+single log line based on the count returned by `SetUserAutomationPrefixes`, e.g.
+`loaded 4 user automation prefix(es) from config`.
 
 `IsAutomatedSession` gains a third loop after the built-in prefix loop:
 
@@ -302,6 +340,7 @@ lists, or per-store filtering).
 | `cmd/agentsview/usage.go` — `agentsview usage`         | SQLite               |
 | `cmd/agentsview/token_use.go` — `agentsview token-use` | SQLite               |
 | `cmd/agentsview/session*.go` — session subcommands     | SQLite               |
+| `cmd/agentsview/projects.go` — `agentsview projects`   | SQLite               |
 | `cmd/agentsview/pg.go` — `pg push`, `pg serve`         | SQLite + PostgreSQL  |
 | `cmd/agentsview/classifier.go` (new, see below)        | SQLite + PostgreSQL  |
 
@@ -474,53 +513,60 @@ success:
 
 ## Validation behavior
 
-| Input                         | Behavior                                  |
-| ----------------------------- | ----------------------------------------- |
-| Missing `[automated]` section | Empty user prefix list (current behavior) |
-| Empty `prefixes = []`         | Empty user prefix list                    |
-| Whitespace-only entry         | Trimmed; if empty, dropped silently       |
-| Duplicate within user list    | First occurrence kept, rest dropped       |
-| Exact duplicate of built-in   | Dropped; logged at info level             |
-| Pattern length > 1024 chars   | Dropped; logged at warning level          |
-| Non-string entry (TOML error) | TOML decoder reports parse error          |
+All non-parse rules are enforced inside `normalizeUserPrefixes` (see Section 2),
+called from `SetUserAutomationPrefixes`. Logging is intentionally minimal — a
+single one-line summary at startup with the surviving count. Per-entry rejection
+is silent because the full list is short and the user can diff their config
+against `agentsview classifier rebuild` output if they want to verify what the
+classifier actually loaded.
+
+| Input                         | Behavior                                                              |
+| ----------------------------- | --------------------------------------------------------------------- |
+| Missing `[automated]` section | Empty user prefix list (current behavior)                             |
+| Empty `prefixes = []`         | Empty user prefix list                                                |
+| Whitespace-only entry         | Trimmed; if empty, dropped silently                                   |
+| Duplicate within user list    | First occurrence kept, rest dropped silently                          |
+| Exact duplicate of built-in   | Dropped silently (built-in still matches)                             |
+| Pattern length > 1024 chars   | Dropped silently                                                      |
+| Non-string entry (TOML error) | TOML decoder reports parse error at `config.Load`; startup fails fast |
 
 ## Testing
 
-| File                                               | Coverage                                                                                                                                                       |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `internal/config/config_test.go`                   | TOML round-trip; normalization (trim/dedupe/empty/length-cap/built-in-overlap)                                                                                 |
-| `internal/db/automated_test.go`                    | New table-driven cases that set user prefixes, classify, then reset                                                                                            |
-| `internal/db/classifier_hash_test.go` (new)        | Hash stable across runs; differs when user list changes; differs across algo bumps                                                                             |
-| `internal/db/automated_backfill_test.go`           | Backfill no-ops when hash matches; runs and updates hash when it differs                                                                                       |
-| `internal/postgres/automated_pgtest_test.go` (new) | PG backfill parity + `pushSession` honors `sess.IsAutomated` (no recompute), under `pgtest` build tag                                                          |
-| `cmd/agentsview/classifier_wiring_test.go` (new)   | Static guardrail: every function in `cmd/agentsview` that calls `db.Open` (or `postgres.Open`) also calls `applyClassifierConfig` earlier in the same function |
-| `cmd/agentsview/classifier_test.go` (new)          | `classifier rebuild` clears SQLite hash, refuses when daemon detected, best-effort on PG                                                                       |
+| File                                               | Coverage                                                                                                                                                                                                                                                                   |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `internal/config/config_test.go`                   | TOML round-trip only — verifies `[automated] prefixes = [...]` parses into `Automated.Prefixes` unchanged. No semantic normalization here.                                                                                                                                 |
+| `internal/db/automated_test.go`                    | (a) `normalizeUserPrefixes` table: trim, drop empty, length cap, within-list dedupe, drop built-in overlap. (b) `IsAutomatedSession` cases with user prefixes set, then reset between cases.                                                                               |
+| `internal/db/classifier_hash_test.go` (new)        | Hash stable across runs; differs when user list changes; differs across algo bumps                                                                                                                                                                                         |
+| `internal/db/automated_backfill_test.go`           | Backfill no-ops when hash matches; runs and updates hash when it differs                                                                                                                                                                                                   |
+| `internal/postgres/automated_pgtest_test.go` (new) | PG backfill parity + `pushSession` honors `sess.IsAutomated` (no recompute), under `pgtest` build tag                                                                                                                                                                      |
+| `cmd/agentsview/classifier_wiring_test.go` (new)   | Static guardrail (recurses into `*ast.FuncLit`): every function or closure in `cmd/agentsview` that calls `db.Open`, `postgres.Open`, `postgres.NewStore`, `postgres.New`, or `postgres.EnsureSchema` must call `applyClassifierConfig` earlier in the same enclosing body |
+| `cmd/agentsview/classifier_test.go` (new)          | `classifier rebuild` clears SQLite hash; refuses on `transportHTTP` and on `transportDirect && DirectReadOnly`; PG delete failure is a hard error when PG is configured (covers reachable-but-error and unreachable cases)                                                 |
 
 All new tests follow the existing table-driven Go convention in this repo.
 SQLite tests use `testDB(t)` from `internal/db/db_test.go`.
 
 ## Files touched
 
-| File                                                                                                                           | Change type                                                       |
-| ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
-| `internal/config/config.go`                                                                                                    | Add struct, parsing, validation                                   |
-| `internal/config/config_test.go`                                                                                               | Tests                                                             |
-| `internal/db/automated.go`                                                                                                     | Singleton + IsAutomatedSession update                             |
-| `internal/db/automated_test.go`                                                                                                | Tests                                                             |
-| `internal/db/classifier_hash.go` (new)                                                                                         | Hash function                                                     |
-| `internal/db/classifier_hash_test.go` (new)                                                                                    | Tests                                                             |
-| `internal/db/db.go`                                                                                                            | Backfill marker → hash                                            |
-| `internal/db/automated_backfill_test.go`                                                                                       | Tests                                                             |
-| `internal/postgres/schema.go`                                                                                                  | PG marker → hash                                                  |
-| `internal/postgres/push.go`                                                                                                    | `pushSession` uses `sess.IsAutomated` instead of recomputing      |
-| `internal/postgres/automated_pgtest_test.go` (new)                                                                             | Tests                                                             |
-| `cmd/agentsview/classifier_wiring.go` (new)                                                                                    | `applyClassifierConfig` central helper                            |
-| `cmd/agentsview/classifier_wiring_test.go` (new)                                                                               | Static guardrail test                                             |
-| `cmd/agentsview/classifier.go` (new)                                                                                           | `classifier rebuild` cobra command and group root                 |
-| `cmd/agentsview/classifier_test.go` (new)                                                                                      | Rebuild command tests                                             |
-| `cmd/agentsview/main.go`                                                                                                       | Register `classifier` group; ensure `serve` uses helper           |
-| `cmd/agentsview/transport.go`                                                                                                  | Helper invocation in `direct(...)` path                           |
-| `cmd/agentsview/sync.go`, `import.go`, `health.go`, `prune.go`, `stats.go`, `usage.go`, `token_use.go`, `pg.go`, `session*.go` | Add helper call between `config.Load*` and `db.Open` (or PG open) |
+| File                                                                                                                                          | Change type                                                       |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `internal/config/config.go`                                                                                                                   | Add struct, parsing, validation                                   |
+| `internal/config/config_test.go`                                                                                                              | Tests                                                             |
+| `internal/db/automated.go`                                                                                                                    | Singleton + IsAutomatedSession update                             |
+| `internal/db/automated_test.go`                                                                                                               | Tests                                                             |
+| `internal/db/classifier_hash.go` (new)                                                                                                        | Hash function                                                     |
+| `internal/db/classifier_hash_test.go` (new)                                                                                                   | Tests                                                             |
+| `internal/db/db.go`                                                                                                                           | Backfill marker → hash                                            |
+| `internal/db/automated_backfill_test.go`                                                                                                      | Tests                                                             |
+| `internal/postgres/schema.go`                                                                                                                 | PG marker → hash                                                  |
+| `internal/postgres/push.go`                                                                                                                   | `pushSession` uses `sess.IsAutomated` instead of recomputing      |
+| `internal/postgres/automated_pgtest_test.go` (new)                                                                                            | Tests                                                             |
+| `cmd/agentsview/classifier_wiring.go` (new)                                                                                                   | `applyClassifierConfig` central helper                            |
+| `cmd/agentsview/classifier_wiring_test.go` (new)                                                                                              | Static guardrail test                                             |
+| `cmd/agentsview/classifier.go` (new)                                                                                                          | `classifier rebuild` cobra command and group root                 |
+| `cmd/agentsview/classifier_test.go` (new)                                                                                                     | Rebuild command tests                                             |
+| `cmd/agentsview/main.go`                                                                                                                      | Register `classifier` group; ensure `serve` uses helper           |
+| `cmd/agentsview/transport.go`                                                                                                                 | Helper invocation in `direct(...)` path                           |
+| `cmd/agentsview/sync.go`, `import.go`, `health.go`, `prune.go`, `stats.go`, `usage.go`, `token_use.go`, `projects.go`, `pg.go`, `session*.go` | Add helper call between `config.Load*` and `db.Open` (or PG open) |
 
 ## Risks and mitigations
 
