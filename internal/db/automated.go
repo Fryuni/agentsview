@@ -26,6 +26,9 @@ var automatedPrefixes = []string{
 	"You are a helpful assistant working on a software project.",
 	"You are combining multiple code review outputs into a single GitHub PR comment.",
 	"You are generating a changelog",
+	"<user_action>",
+	"Review the code changes introduced by commit ",
+	"Implement the following plan:",
 }
 
 // automatedSubstrings are patterns matched anywhere in the
@@ -42,6 +45,7 @@ var automatedSubstrings = []string{
 // (e.g., a single-word warmup ping).
 var automatedExactMatches = []string{
 	"Warmup",
+	"Respond with exactly: OK",
 }
 
 const userPrefixMaxLen = 1024

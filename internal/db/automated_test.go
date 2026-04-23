@@ -206,6 +206,70 @@ func TestIsAutomatedSession(t *testing.T) {
 			"Can you help me write a script that is generating a changelog for our release?",
 			false,
 		},
+
+		// Codex IDE in-IDE action wrapper. Codex wraps in-editor
+		// review/fix actions in a <user_action> XML envelope before
+		// sending to the model.
+		{
+			"CodexUserActionReview",
+			"<user_action>\n  <context>User initiated a review task.</context>\n  <action>review</action>\n</user_action>",
+			true,
+		},
+		{
+			"CodexUserActionApply",
+			"<user_action><action>apply_patch</action></user_action>",
+			true,
+		},
+
+		// Templated automated review prompt — common across IDE
+		// review actions and CI hook scripts.
+		{
+			"ReviewCodeChangesByCommit",
+			"Review the code changes introduced by commit 680de37a6c99f35dd9bdc3b1f52d8278dc2e6eef. Provide prioritized, actionable findings.",
+			true,
+		},
+
+		// Codex CLI warmup probe (codex equivalent of Claude
+		// Code's "Warmup" exact match).
+		{
+			"CodexRespondExactlyOK",
+			"Respond with exactly: OK",
+			true,
+		},
+		{
+			"CodexRespondExactlyOKTrailingNewline",
+			"Respond with exactly: OK\n",
+			true,
+		},
+
+		// Subagent-driven-development implementer prompt template.
+		{
+			"ImplementTheFollowingPlan",
+			"Implement the following plan:\n# Plan: msgvault mcp\n## Overview\nAdd a `msgvault mcp` command...",
+			true,
+		},
+
+		// Negative: "<user_action>" appearing later in prose (must
+		// be at start to match).
+		{
+			"UserActionTagInBody",
+			"Can you explain what the <user_action> wrapper does in Codex?",
+			false,
+		},
+		// Negative: "Respond with exactly: OK" must be exact, not a
+		// prefix of a longer message.
+		{
+			"RespondExactlyOKWithExtra",
+			"Respond with exactly: OK and then explain why.",
+			false,
+		},
+		// Negative: human paraphrase shouldn't trip the implementer
+		// prefix.
+		{
+			"ImplementPhraseInProse",
+			"Can you implement the plan we discussed yesterday?",
+			false,
+		},
 	}
 
 	for _, tt := range tests {
