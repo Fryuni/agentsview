@@ -41,7 +41,8 @@ All four match as prefixes against the `first_message` column.
 
 Seven units, each with a clear single responsibility:
 
-1. **Config schema** — TOML parsing, normalization, validation.
+1. **Config schema** — TOML parsing only. Semantic normalization happens in
+   `internal/db` (see unit 2).
 1. **Classifier singleton** — package-level state in `internal/db` that merges
    built-ins with the configured user prefixes.
 1. **Classifier hash** — stable hash over (algorithm version + all built-in
@@ -464,10 +465,22 @@ iterating on `[automated]` config locally.
 
 1. Loads config and calls `applyClassifierConfig(cfg)` (which invokes
    `SetUserAutomationPrefixes`, where normalization happens). Surfaces parse
-   errors before touching the DB. Then prints a single line
-   `loaded N user automation prefix(es) from config` so the user can verify
-   their edits parsed as expected — `classifier rebuild` is the "explain what's
-   happening" command, so this output belongs here.
+   errors before touching the DB. Then prints the post-normalization prefix list
+   — one prefix per line, prefixed with the count, e.g.
+
+   ```
+   loaded 3 user automation prefix(es) from config:
+     - You are analyzing an essay
+     - You are grading quotes
+     - Grade these Benn Stancil quotes
+   ```
+
+   Reading from `db.UserAutomationPrefixes()` so the output reflects exactly
+   what `IsAutomatedSession` will match against. Lets the user diff against
+   their `[automated] prefixes = [...]` to confirm trim/dedupe/built-in-overlap
+   filtering did what they expected. `classifier rebuild` is the "explain what's
+   happening" command, so this verbose output belongs here (and only here —
+   `serve` startup logs only the count).
 
 1. Refuses to run if any local daemon owns the DB. Detection reuses
    `detectTransport(cfg.DataDir, 0)` from `cmd/agentsview/transport.go`. Reject
@@ -524,11 +537,12 @@ success:
 ## Validation behavior
 
 All non-parse rules are enforced inside `normalizeUserPrefixes` (see Section 2),
-called from `SetUserAutomationPrefixes`. Logging is intentionally minimal — a
-single one-line summary at startup with the surviving count. Per-entry rejection
-is silent because the full list is short and the user can diff their config
-against `agentsview classifier rebuild` output if they want to verify what the
-classifier actually loaded.
+called from `SetUserAutomationPrefixes`. Per-entry rejection is silent at the
+hot path: `serve` startup only logs the surviving count, and write-path commands
+log nothing at all. Users who want to see *which* entries survived run
+`agentsview classifier rebuild`, which prints the full normalized prefix list
+(see CLI section above) so they can diff against their `[automated] prefixes` to
+confirm what the classifier actually loaded.
 
 | Input                         | Behavior                                                              |
 | ----------------------------- | --------------------------------------------------------------------- |
