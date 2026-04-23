@@ -460,11 +460,20 @@ func buildSessionFilter(f SessionFilter) (string, []any) {
 	// instead of including all children in the database.
 	baseWhere := strings.Join(basePreds, " AND ")
 
-	// Root match: must pass all filter predicates + one-shot.
+	// Root match: must pass all filter predicates + one-shot,
+	// AND not be a subagent/fork. Subagents and forks are child
+	// workflows (Task tool spawns, chat forks) that should only
+	// surface via their parent — never as standalone roots.
+	// Without this guard, orphan subagents (whose parent JSONL
+	// was rotated off disk by Claude Code, or whose parent is
+	// filtered out by e.g. is_automated) appear as fake root
+	// groups in the sidebar.
 	rootMatchParts := append([]string{}, filterPreds...)
 	if oneShotPred != "" {
 		rootMatchParts = append(rootMatchParts, oneShotPred)
 	}
+	rootMatchParts = append(rootMatchParts,
+		"relationship_type NOT IN ('subagent', 'fork')")
 	rootMatch := strings.Join(rootMatchParts, " AND ")
 
 	// Subquery for parent inclusion: same criteria as root

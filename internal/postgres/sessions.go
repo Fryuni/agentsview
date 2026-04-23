@@ -278,10 +278,16 @@ func buildPGSessionFilter(
 
 	baseWhere := strings.Join(basePreds, " AND ")
 
+	// Root match: must pass all filter predicates + one-shot,
+	// AND not be a subagent/fork. Mirrors SQLite buildSessionFilter
+	// — see that comment for rationale. Without this guard, orphan
+	// subagents appear as fake root groups in the sidebar.
 	rootMatchParts := append([]string{}, filterPreds...)
 	if oneShotPred != "" {
 		rootMatchParts = append(rootMatchParts, oneShotPred)
 	}
+	rootMatchParts = append(rootMatchParts,
+		"relationship_type NOT IN ('subagent', 'fork')")
 	rootMatch := strings.Join(rootMatchParts, " AND ")
 
 	subqWhere := "message_count > 0 AND deleted_at IS NULL"

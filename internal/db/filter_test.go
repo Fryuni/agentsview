@@ -451,16 +451,17 @@ func TestIncludeChildrenScopesToMatchingParent(t *testing.T) {
 			want: []string{"parentA", "childA"},
 		},
 		{
-			// childA (agent=codex) matches the filter directly
-			// even though its parent (parentA, agent=claude)
-			// does not. childB is included because its parent
-			// (parentB, agent=codex) matches.
-			name: "ChildMatchesDirectlyOrViaParent",
+			// Subagent/fork rows can only be included via their
+			// parent, never as direct matches. childA (codex
+			// subagent of claude parentA) is excluded because
+			// its parent doesn't match Agent=codex. childB is
+			// included because its parent parentB matches.
+			name: "SubagentOnlyViaMatchingParent",
 			filter: SessionFilter{
 				IncludeChildren: true,
 				Agent:           "codex",
 			},
-			want: []string{"childA", "parentB", "childB"},
+			want: []string{"parentB", "childB"},
 		},
 		{
 			// Neither parentC (gemini) nor childC (gemini)
@@ -489,6 +490,70 @@ func TestIncludeChildrenScopesToMatchingParent(t *testing.T) {
 			requireSessions(t, d, tt.filter, tt.want)
 		})
 	}
+}
+
+// TestIncludeChildrenExcludesOrphanSubagents reproduces the
+// sidebar bug where subagents whose parent was rotated off disk
+// by Claude Code (or whose parent is excluded by is_automated)
+// surfaced as fake root groups. With IncludeChildren=true and
+// ExcludeAutomated active, a subagent row must ONLY appear when
+// its parent is loaded and also passes the filter — never on
+// its own.
+func TestIncludeChildrenExcludesOrphanSubagents(t *testing.T) {
+	d := testDB(t)
+
+	// Legitimate case: non-automated root with a subagent child.
+	insertSession(t, d, "root", "proj", func(s *Session) {
+		s.MessageCount = 10
+		s.UserMessageCount = 5
+	})
+	insertSession(t, d, "root-sub", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("root")
+		s.RelationshipType = "subagent"
+	})
+
+	// Orphan case 1: subagent whose parent doesn't exist in
+	// the sessions table (parent JSONL was deleted from disk).
+	insertSession(t, d, "orphan-sub", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("missing-parent-id")
+		s.RelationshipType = "subagent"
+	})
+
+	// Orphan case 2: subagent whose parent IS loaded but is
+	// automated, so it fails the ExcludeAutomated filter.
+	fm := "You are a code reviewer. Review the code."
+	insertSession(t, d, "auto-root", "proj", func(s *Session) {
+		s.FirstMessage = &fm
+		s.MessageCount = 3
+		s.UserMessageCount = 1
+	})
+	insertSession(t, d, "auto-sub", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("auto-root")
+		s.RelationshipType = "subagent"
+	})
+
+	// Orphan case 3: fork whose parent is missing.
+	insertSession(t, d, "orphan-fork", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("also-missing")
+		s.RelationshipType = "fork"
+	})
+
+	f := SessionFilter{
+		IncludeChildren:  true,
+		ExcludeAutomated: true,
+	}
+	// Expected: root + its subagent survive; all three orphans
+	// are excluded. auto-root is filtered out by ExcludeAutomated,
+	// which also drops auto-sub (its parent is no longer loaded).
+	requireSessions(t, d, f, []string{"root", "root-sub"})
 }
 
 func TestIncludeChildrenExcludeOneShotAgent(t *testing.T) {
