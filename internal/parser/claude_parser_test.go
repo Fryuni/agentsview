@@ -1036,3 +1036,35 @@ func TestParseClaudeSession_PromotesSystemSubtypes(t *testing.T) {
 	assert.Equal(t, "system", systems[1].SourceType)
 	assert.Equal(t, RoleUser, systems[1].Role)
 }
+
+func TestIsSkippablePreviewCommand(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"bare /clear", "/clear", true},
+		{"bare /effort", "/effort", true},
+		{"/clear with trailing space", "/clear ", true},
+		{"/clear with args", "/clear foo", true},
+		{"/effort with args", "/effort max", true},
+		{"surrounded by whitespace", "  /clear  ", true},
+		{"/clear with tab", "/clear\tfoo", true},
+		{"/clear with newline", "/clear\nfoo", true},
+		{"empty string", "", false},
+		{"/clearcache (no word boundary)", "/clearcache", false},
+		{"/effortless (no word boundary)", "/effortless", false},
+		{"/cleareffort", "/cleareffort", false},
+		{"unrelated command", "/unrelated", false},
+		{"prose containing /clear", "hello /clear", false},
+		{"/clear-xyz (dash not whitespace)", "/clear-xyz", false},
+		{"plain text", "Fix the login bug", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isSkippablePreviewCommand(tc.content)
+			assert.Equal(t, tc.want, got,
+				"content=%q", tc.content)
+		})
+	}
+}

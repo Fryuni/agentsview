@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/tidwall/gjson"
 )
@@ -1156,6 +1157,36 @@ func isCommandEnvelope(content string) bool {
 	}
 	stripped := xmlCmdStripRe.ReplaceAllString(trimmed, "")
 	return strings.TrimSpace(stripped) == ""
+}
+
+// previewSkippedCommands lists Claude Code commands that should
+// not be used as a session's first_message preview. When a
+// session opens with one of these, the parser skips past it and
+// picks the next real user message so the sidebar shows
+// something descriptive.
+var previewSkippedCommands = []string{"/clear", "/effort"}
+
+// isSkippablePreviewCommand returns true when content is a known
+// Claude Code command (optionally followed by arguments), for the
+// purpose of skipping it when computing first_message. Match is
+// word-boundary: the trimmed content must equal the command
+// exactly or be followed by a whitespace rune, so "/clearcache"
+// does not match "/clear".
+func isSkippablePreviewCommand(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	for _, cmd := range previewSkippedCommands {
+		if !strings.HasPrefix(trimmed, cmd) {
+			continue
+		}
+		if len(trimmed) == len(cmd) {
+			return true
+		}
+		r, _ := utf8.DecodeRuneInString(trimmed[len(cmd):])
+		if unicode.IsSpace(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // fileEndsWithNewline returns true when the byte at size-1
