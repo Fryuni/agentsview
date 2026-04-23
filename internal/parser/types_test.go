@@ -576,11 +576,27 @@ func TestResolveOpenCodeWatchRootsStorage(t *testing.T) {
 	}
 
 	got := ResolveOpenCodeWatchRoots(root)
-	want := []string{
-		filepath.Join(root, "storage", "session"),
-		filepath.Join(root, "storage", "message"),
-		filepath.Join(root, "storage", "part"),
+	want := []string{filepath.Join(root, "storage")}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ResolveOpenCodeWatchRoots() = %v, want %v", got, want)
 	}
+}
+
+// A fresh opencode install may only have storage/session at startup;
+// message/ and part/ get created lazily when the first message is
+// written. Returning storage/ as the watch root ensures the watcher's
+// Create handler picks up those lazy subdirs without a restart.
+func TestResolveOpenCodeWatchRootsStorageMissingSubdirs(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(
+		filepath.Join(root, "storage", "session"),
+		0o755,
+	); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+
+	got := ResolveOpenCodeWatchRoots(root)
+	want := []string{filepath.Join(root, "storage")}
 	if !slices.Equal(got, want) {
 		t.Fatalf("ResolveOpenCodeWatchRoots() = %v, want %v", got, want)
 	}
