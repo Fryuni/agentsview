@@ -681,8 +681,8 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 	ctx := context.Background()
 
 	// Five sessions chosen to place one row in each interesting bucket
-	// for duration and peak_context. userMsgs drives archetype/scope:
-	// a,b → automation (userMsgs <= 1); c,d,e → human.
+	// for duration and peak_context. is_automated drives the scope_human
+	// filter: a,b → automation (isAutomated=true); c,d,e → human.
 	fixtures := []struct {
 		id             string
 		userMsgs       int
@@ -690,12 +690,13 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 		durMin         float64
 		toolCalls      int
 		assistantTurns int
+		isAutomated    bool
 	}{
-		{"a", 0, 2_000, 0.5, 0, 0},
-		{"b", 1, 8_000, 0.9, 1, 1},
-		{"c", 3, 25_000, 10.0, 6, 3},
-		{"d", 10, 60_000, 25.0, 15, 10},
-		{"e", 30, 150_000, 120.0, 30, 30},
+		{"a", 0, 2_000, 0.5, 0, 0, true},
+		{"b", 1, 8_000, 0.9, 1, 1, true},
+		{"c", 3, 25_000, 10.0, 6, 3, false},
+		{"d", 10, 60_000, 25.0, 15, 10, false},
+		{"e", 30, 150_000, 120.0, 30, 30, false},
 	}
 	for _, f := range fixtures {
 		insertSessionFixture(t, d, sessionFixture{
@@ -708,6 +709,7 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 			startedAt:      hoursAgo(10),
 			totalToolCalls: f.toolCalls,
 			assistantTurns: f.assistantTurns,
+			isAutomated:    f.isAutomated,
 		})
 	}
 
@@ -824,6 +826,36 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 			t.Errorf("tools_per_turn scope_all bucket %d: got %d want %d",
 				i, gotTPT[i].Count, w)
 		}
+	}
+}
+
+func Test_computeDistributions_scopeHuman_flag(t *testing.T) {
+	d := testDB(t)
+	// Short non-automated: must count in scope_human.
+	insertSessionFixture(t, d, sessionFixture{
+		id: "short-human", userMsgs: 1, durationMin: 3,
+		startedAt: hoursAgo(1), isAutomated: false,
+	})
+	// Multi-turn automated: must be excluded from scope_human.
+	insertSessionFixture(t, d, sessionFixture{
+		id: "auto-long", userMsgs: 4, durationMin: 30,
+		startedAt: hoursAgo(1), isAutomated: true,
+	})
+
+	got, err := d.GetSessionStats(t.Context(), StatsFilter{Since: "1d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+	// scope_all has both rows — mean ~= 16.5.
+	allMean := got.Distributions.DurationMinutes.ScopeAll.Mean
+	if allMean < 15 || allMean > 18 {
+		t.Fatalf("scope_all duration mean = %.2f, want ~16.5", allMean)
+	}
+	// scope_human has only the non-automated short session — mean ~= 3.
+	humanMean := got.Distributions.DurationMinutes.ScopeHuman.Mean
+	if humanMean < 2 || humanMean > 4 {
+		t.Fatalf("scope_human duration mean = %.2f, want ~3 (short-human only)",
+			humanMean)
 	}
 }
 

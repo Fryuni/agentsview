@@ -651,8 +651,10 @@ func (a *scopedAccumulator) finalize() ScopedDistribution {
 // SessionStats. Scope rules:
 //
 //   - ScopeAll includes every row in the window.
-//   - ScopeHuman requires userMessageCount >= 2 (mirrors the archetype
-//     boundary between automation and quick).
+//   - ScopeHuman excludes any row where is_automated is set. This
+//     aligns scope_human with the single authority for automation
+//     classification; the old userMessageCount >= 2 heuristic is
+//     gone.
 //
 // Per-metric filters excluded from both scopes:
 //
@@ -677,7 +679,7 @@ func computeDistributions(s *SessionStats, rows []sessionStatsRow) {
 	var pcNull int
 
 	for _, r := range rows {
-		human := r.userMessageCount >= 2
+		human := !r.isAutomated
 		if r.endedAt.Valid {
 			dur := r.endedAt.Time.Sub(r.startedAt).Minutes()
 			// Drop clock-skewed / malformed sessions whose ended_at
