@@ -1488,6 +1488,63 @@ func TestGetSessionStats_AgentPortfolio_Empty(t *testing.T) {
 	}
 }
 
+func Test_computeAgentPortfolio_humanScoped(t *testing.T) {
+	d := testDB(t)
+	insertSessionFixture(t, d, sessionFixture{
+		id: "claude-human", agent: "claude", userMsgs: 3,
+		startedAt: hoursAgo(1), totalOutputTok: 100,
+		isAutomated: false,
+	})
+	insertSessionFixture(t, d, sessionFixture{
+		id: "codex-auto", agent: "codex", userMsgs: 1,
+		startedAt: hoursAgo(1), totalOutputTok: 50,
+		isAutomated: true,
+	})
+	insertSessionFixture(t, d, sessionFixture{
+		id: "gemini-auto", agent: "gemini", userMsgs: 1,
+		startedAt: hoursAgo(1), totalOutputTok: 25,
+		isAutomated: true,
+	})
+
+	got, err := d.GetSessionStats(t.Context(), StatsFilter{Since: "1d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+	ap := got.AgentPortfolio
+
+	// All-sessions view: every agent present.
+	if ap.BySessions["claude"] != 1 || ap.BySessions["codex"] != 1 ||
+		ap.BySessions["gemini"] != 1 {
+		t.Fatalf("BySessions = %v, want claude=1,codex=1,gemini=1",
+			ap.BySessions)
+	}
+	// primary ties on count; lexicographic min wins → claude.
+	if ap.Primary != "claude" {
+		t.Fatalf("Primary = %q, want claude", ap.Primary)
+	}
+
+	// Human-scoped view: only claude.
+	if _, ok := ap.BySessionsHuman["codex"]; ok {
+		t.Fatalf("BySessionsHuman must exclude codex: %v",
+			ap.BySessionsHuman)
+	}
+	if _, ok := ap.BySessionsHuman["gemini"]; ok {
+		t.Fatalf("BySessionsHuman must exclude gemini: %v",
+			ap.BySessionsHuman)
+	}
+	if ap.BySessionsHuman["claude"] != 1 {
+		t.Fatalf("BySessionsHuman[claude] = %d, want 1",
+			ap.BySessionsHuman["claude"])
+	}
+	if ap.ByTokensHuman["claude"] != 100 {
+		t.Fatalf("ByTokensHuman[claude] = %d, want 100",
+			ap.ByTokensHuman["claude"])
+	}
+	if ap.PrimaryHuman != "claude" {
+		t.Fatalf("PrimaryHuman = %q, want claude", ap.PrimaryHuman)
+	}
+}
+
 // cacheTokenBreakdown names the four token dimensions the cache
 // economics section reads per assistant message.
 type cacheTokenBreakdown struct {

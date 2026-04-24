@@ -116,6 +116,16 @@ type StatsAgentPortfolio struct {
 	ByTokens   map[string]int64 `json:"by_tokens"`
 	ByMessages map[string]int   `json:"by_messages"`
 	Primary    string           `json:"primary"`
+
+	// Human-scoped peer fields. Populated alongside the all-sessions
+	// maps and filtered to rows where is_automated = 0. Introduced in
+	// the flag-authority pipeline change; tkmx-server's renderer
+	// prefers these when every portfolio-bearing blob in a user's
+	// machine set carries them.
+	BySessionsHuman map[string]int   `json:"by_sessions_human"`
+	ByTokensHuman   map[string]int64 `json:"by_tokens_human"`
+	ByMessagesHuman map[string]int   `json:"by_messages_human"`
+	PrimaryHuman    string           `json:"primary_human"`
 }
 
 type StatsCacheEconomics struct {

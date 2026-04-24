@@ -777,6 +777,9 @@ func computeAgentPortfolio(s *SessionStats, rows []sessionStatsRow) {
 	bySessions := map[string]int{}
 	byMessages := map[string]int{}
 	byTokens := map[string]int64{}
+	bySessionsHuman := map[string]int{}
+	byMessagesHuman := map[string]int{}
+	byTokensHuman := map[string]int64{}
 	for _, r := range rows {
 		if r.agent == "" {
 			continue
@@ -786,11 +789,22 @@ func computeAgentPortfolio(s *SessionStats, rows []sessionStatsRow) {
 		if r.hasTotalOutputTokens {
 			byTokens[r.agent] += r.totalOutputTokens
 		}
+		if !r.isAutomated {
+			bySessionsHuman[r.agent]++
+			byMessagesHuman[r.agent] += r.messageCount
+			if r.hasTotalOutputTokens {
+				byTokensHuman[r.agent] += r.totalOutputTokens
+			}
+		}
 	}
 	s.AgentPortfolio.BySessions = bySessions
 	s.AgentPortfolio.ByMessages = byMessages
 	s.AgentPortfolio.ByTokens = byTokens
 	s.AgentPortfolio.Primary = pickPrimaryAgent(bySessions)
+	s.AgentPortfolio.BySessionsHuman = bySessionsHuman
+	s.AgentPortfolio.ByMessagesHuman = byMessagesHuman
+	s.AgentPortfolio.ByTokensHuman = byTokensHuman
+	s.AgentPortfolio.PrimaryHuman = pickPrimaryAgent(bySessionsHuman)
 }
 
 // pickPrimaryAgent returns the agent with the highest session count.
