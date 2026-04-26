@@ -7,6 +7,7 @@ import {
   getAnalyticsActivity,
   getAnalyticsHeatmap,
   getAnalyticsTopSessions,
+  getTrendsTerms,
   watchEvents,
   WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS,
   watchSession,
@@ -663,6 +664,42 @@ describe("query serialization", () => {
       expect(lastUrl()).toBe(
         "/api/v1/analytics/top-sessions?from=2024-01-01",
       );
+    });
+  });
+
+  describe("trends query serialization", () => {
+    it("serializes trends repeated term params", async () => {
+      fetchSpy.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          granularity: "week",
+          from: "2024-06-01",
+          to: "2024-06-30",
+          message_count: 0,
+          buckets: [],
+          series: [],
+        }),
+      });
+
+      await getTrendsTerms({
+        from: "2024-06-01",
+        to: "2024-06-30",
+        timezone: "UTC",
+        granularity: "week",
+        terms: ["load bearing | load-bearing", "seam"],
+      });
+
+      const [path, query = ""] = lastUrl().split("?");
+      expect(path).toBe("/api/v1/trends/terms");
+      const params = new URLSearchParams(query);
+      expect(params.get("from")).toBe("2024-06-01");
+      expect(params.get("to")).toBe("2024-06-30");
+      expect(params.get("timezone")).toBe("UTC");
+      expect(params.get("granularity")).toBe("week");
+      expect(params.getAll("term")).toEqual([
+        "load bearing | load-bearing",
+        "seam",
+      ]);
     });
   });
 });

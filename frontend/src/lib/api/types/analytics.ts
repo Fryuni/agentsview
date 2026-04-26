@@ -1,6 +1,7 @@
 /** Analytics types — match Go structs in internal/db/analytics.go */
 
 export type Granularity = "day" | "week" | "month";
+export type TrendsGranularity = "day" | "week" | "month";
 export type HeatmapMetric =
   | "messages"
   | "sessions"
@@ -226,4 +227,30 @@ export interface SignalsAnalyticsResponse {
   trend: SignalsTrendBucket[];
   by_agent: SignalsAgentRow[];
   by_project: SignalsProjectRow[];
+}
+
+export interface TrendsBucket {
+  date: string;
+  message_count: number;
+}
+
+export interface TrendsPoint {
+  date: string;
+  count: number;
+}
+
+export interface TrendsSeries {
+  term: string;
+  variants: string[];
+  total: number;
+  points: TrendsPoint[];
+}
+
+export interface TrendsTermsResponse {
+  granularity: TrendsGranularity;
+  from: string;
+  to: string;
+  message_count: number;
+  buckets: TrendsBucket[];
+  series: TrendsSeries[];
 }

@@ -252,7 +252,7 @@
     <div class="more-wrap">
       <button
         class="nav-btn"
-        class:active={router.route === "pinned" || router.route === "insights" || router.route === "trash" || moreOpen}
+        class:active={router.route === "trends" || router.route === "pinned" || router.route === "insights" || router.route === "trash" || moreOpen}
         bind:this={moreBtnRef}
         onclick={() => { moreOpen = !moreOpen; }}
         aria-label="More navigation"
@@ -265,6 +265,11 @@
       </button>
       {#if moreOpen}
         <div class="more-dropdown" role="menu" bind:this={moreDropRef}>
+          <button class="more-item" role="menuitem"
+            class:active={router.route === "trends"}
+            onclick={() => { router.navigate("trends"); moreOpen = false; }}>
+            Trends
+          </button>
           <button class="more-item" role="menuitem"
             class:active={router.route === "pinned"}
             onclick={() => { router.navigate("pinned"); moreOpen = false; }}>

@@ -28,6 +28,8 @@ import type {
   Granularity,
   HeatmapMetric,
   TopSessionsMetric,
+  TrendsGranularity,
+  TrendsTermsResponse,
   Insight,
   InsightsResponse,
   GenerateInsightRequest,
@@ -880,6 +882,38 @@ export function getAnalyticsSignals(
   return fetchJSON(
     `/analytics/signals${buildQuery({ ...params })}`,
   );
+}
+
+export interface TrendsTermsParams extends AnalyticsParams {
+  granularity?: TrendsGranularity;
+  terms: string[];
+}
+
+function buildTrendsTermsQuery(params: TrendsTermsParams): string {
+  const q = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (
+      key === "terms" ||
+      value === undefined ||
+      value === null ||
+      value === ""
+    ) {
+      continue;
+    }
+    // Match buildQuery semantics: 0 and false are valid query values.
+    q.set(key, String(value));
+  }
+  for (const term of params.terms) {
+    if (term.trim()) q.append("term", term);
+  }
+  const qs = q.toString();
+  return qs ? `?${qs}` : "";
+}
+
+export function getTrendsTerms(
+  params: TrendsTermsParams,
+): Promise<TrendsTermsResponse> {
+  return fetchJSON(`/trends/terms${buildTrendsTermsQuery(params)}`);
 }
 
 /* Insights */

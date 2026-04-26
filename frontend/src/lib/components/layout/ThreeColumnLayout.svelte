@@ -313,6 +313,17 @@
       </button>
       <button
         class="mobile-nav-btn"
+        class:active={router.route === "trends"}
+        onclick={() => mobileNav("trends")}
+      >
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M2 13.5a.5.5 0 01-.5-.5V2a.5.5 0 011 0v10.5H14a.5.5 0 010 1H2z"/>
+          <path d="M3.35 10.35a.5.5 0 010-.7l2.5-2.5a.5.5 0 01.7 0L8.5 9.09l3.15-4.44a.5.5 0 01.82.58l-3.5 4.94a.5.5 0 01-.76.06L6.2 8.21l-2.15 2.14a.5.5 0 01-.7 0z"/>
+        </svg>
+        Trends
+      </button>
+      <button
+        class="mobile-nav-btn"
         class:active={router.route === "pinned"}
         onclick={() => mobileNav("pinned")}
       >
@@ -488,24 +499,25 @@
     }
 
     .mobile-nav {
-      display: flex;
-      gap: 2px;
-      padding: 8px 8px 0;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+      padding: 8px;
       border-bottom: 1px solid var(--border-muted);
       flex-shrink: 0;
     }
 
     .mobile-nav-btn {
-      flex: 1;
       display: flex;
       align-items: center;
       justify-content: center;
       gap: 4px;
-      padding: 6px 0;
+      min-width: 0;
+      padding: 6px 4px;
       font-size: 11px;
       font-weight: 500;
       color: var(--text-muted);
-      border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+      border-radius: var(--radius-sm);
       white-space: nowrap;
       transition: background 0.12s, color 0.12s;
     }
