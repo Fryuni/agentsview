@@ -286,10 +286,14 @@ func installFromArchiveTo(
 
 // installBinaryTo replaces the binary at dstPath with the one
 // at srcPath. The new binary is staged in a sibling tmp file
-// with the executable mode bit set, then atomically renamed
-// into place. This avoids a window in which a consumer running
-// agentsview concurrently with the update would observe a
-// partial or non-executable file at dstPath.
+// with the executable mode bit set, then renamed into place.
+//
+// On Unix os.Rename atomically replaces dstPath in a single
+// syscall, so concurrent readers always see one of the two
+// binaries — never a missing or partial file. On Windows the
+// existing binary must be moved aside first because os.Rename
+// cannot replace a running executable; this leaves dstPath
+// briefly missing between the two renames.
 func installBinaryTo(srcPath, dstPath string) error {
 	backupPath := dstPath + ".old"
 	tmpPath := dstPath + ".new"
@@ -315,19 +319,17 @@ func installBinaryTo(srcPath, dstPath string) error {
 		return fmt.Errorf("chmod: %w", err)
 	}
 
-	// Move the existing binary aside before installing. Windows
-	// requires this because os.Rename cannot replace a running
-	// binary; on Unix it provides a rollback target.
-	haveExisting := false
-	if _, err := os.Stat(dstPath); err == nil {
-		if err := os.Rename(dstPath, backupPath); err != nil {
-			return fmt.Errorf("backup: %w", err)
+	movedAside := false
+	if runtime.GOOS == "windows" {
+		aside, err := movePreviousAside(dstPath, backupPath)
+		if err != nil {
+			return err
 		}
-		haveExisting = true
+		movedAside = aside
 	}
 
 	if err := os.Rename(tmpPath, dstPath); err != nil {
-		if haveExisting {
+		if movedAside {
 			if rbErr := os.Rename(backupPath, dstPath); rbErr != nil {
 				return fmt.Errorf(
 					"install: %w (rollback also failed: %v)",
@@ -341,6 +343,19 @@ func installBinaryTo(srcPath, dstPath string) error {
 	installed = true
 	os.Remove(backupPath)
 	return nil
+}
+
+// movePreviousAside renames an existing dstPath to backupPath.
+// Used on Windows where os.Rename cannot replace a running
+// executable. Returns true if dstPath was moved.
+func movePreviousAside(dstPath, backupPath string) (bool, error) {
+	if _, err := os.Stat(dstPath); err != nil {
+		return false, nil
+	}
+	if err := os.Rename(dstPath, backupPath); err != nil {
+		return false, fmt.Errorf("backup: %w", err)
+	}
+	return true, nil
 }
 
 func fetchLatestRelease() (*Release, error) {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"testing"
 )
 
@@ -200,6 +201,77 @@ func TestInstallBinaryToPreservesOnSourceMissing(t *testing.T) {
 	}
 	if _, err := os.Stat(dstPath + ".old"); !os.IsNotExist(err) {
 		t.Error("backup .old file should not be left behind")
+	}
+}
+
+func TestInstallBinaryToNeverMissingDuringUpdate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip(
+			"Windows must rename the running binary aside; " +
+				"a brief missing window is unavoidable",
+		)
+	}
+
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "agentsview")
+	dstPath := filepath.Join(dstDir, "agentsview")
+
+	if err := os.WriteFile(srcPath, []byte("new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dstPath, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var observations, missing atomic.Uint64
+	stop := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := os.Stat(dstPath); err != nil &&
+				os.IsNotExist(err) {
+				missing.Add(1)
+			}
+			observations.Add(1)
+		}
+	}()
+
+	const iterations = 1000
+	for i := range iterations {
+		if err := installBinaryTo(srcPath, dstPath); err != nil {
+			close(stop)
+			<-done
+			t.Fatalf("install iteration %d: %v", i, err)
+		}
+	}
+
+	close(stop)
+	<-done
+
+	t.Logf(
+		"iterations=%d observations=%d missing=%d",
+		iterations, observations.Load(), missing.Load(),
+	)
+
+	if observations.Load() < 1000 {
+		t.Skipf(
+			"observer ran only %d times, test inconclusive",
+			observations.Load(),
+		)
+	}
+	if missing.Load() > 0 {
+		t.Errorf(
+			"dstPath observed missing %d times during install",
+			missing.Load(),
+		)
 	}
 }
 
