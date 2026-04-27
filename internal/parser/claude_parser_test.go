@@ -258,6 +258,118 @@ func TestParseClaudeSession_SkippedMessages(t *testing.T) {
 	})
 }
 
+func TestParseClaudeSession_QueuedCommand(t *testing.T) {
+	t.Run("surfaces as user message between turns", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON("first request", tsZero),
+			testjsonl.ClaudeAssistantJSON([]map[string]any{
+				{"type": "text", "text": "starting work"},
+			}, tsZeroS1),
+			testjsonl.ClaudeQueuedCommandJSON(
+				"hold on, also do X", tsZeroS2,
+			),
+			testjsonl.ClaudeAssistantJSON([]map[string]any{
+				{"type": "text", "text": "OK doing X too"},
+			}, "2024-01-01T00:00:03Z"),
+		)
+		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+		require.Len(t, msgs, 4)
+		assert.Equal(t, 4, sess.MessageCount)
+		// Original first user + queued command both count.
+		assert.Equal(t, 2, sess.UserMessageCount)
+		assert.Equal(t, "first request", sess.FirstMessage)
+
+		assert.Equal(t, RoleUser, msgs[0].Role)
+		assert.Equal(t, "first request", msgs[0].Content)
+
+		assert.Equal(t, RoleAssistant, msgs[1].Role)
+
+		assert.Equal(t, RoleUser, msgs[2].Role)
+		assert.Equal(t, "hold on, also do X", msgs[2].Content)
+		assert.False(t, msgs[2].IsSystem)
+		assert.Equal(t, "user", msgs[2].SourceType)
+		assert.Equal(t, "queued_command", msgs[2].SourceSubtype)
+
+		assert.Equal(t, RoleAssistant, msgs[3].Role)
+
+		for i, m := range msgs {
+			assert.Equal(t, i, m.Ordinal,
+				"ordinal mismatch at %d", i)
+		}
+	})
+
+	t.Run("becomes first message when session opens with one", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeQueuedCommandJSON(
+				"queued opener", tsZero,
+			),
+			testjsonl.ClaudeAssistantJSON([]map[string]any{
+				{"type": "text", "text": "ok"},
+			}, tsZeroS1),
+		)
+		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+		require.Len(t, msgs, 2)
+		assert.Equal(t, 1, sess.UserMessageCount)
+		assert.Equal(t, "queued opener", sess.FirstMessage)
+		assert.Equal(t, "queued_command", msgs[0].SourceSubtype)
+	})
+
+	t.Run("empty prompt is skipped", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON("hi", tsZero),
+			testjsonl.ClaudeQueuedCommandJSON("   ", tsZeroS1),
+			testjsonl.ClaudeAssistantJSON([]map[string]any{
+				{"type": "text", "text": "ok"},
+			}, tsZeroS2),
+		)
+		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+		assert.Equal(t, 2, sess.MessageCount)
+		require.Len(t, msgs, 2)
+	})
+
+	t.Run("non-queued attachment types are dropped", func(t *testing.T) {
+		taskReminder := `{"type":"attachment","timestamp":"` +
+			tsZeroS1 + `","attachment":{"type":"task_reminder",` +
+			`"content":"reminder"}}`
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON("hi", tsZero),
+			taskReminder,
+			testjsonl.ClaudeAssistantJSON([]map[string]any{
+				{"type": "text", "text": "ok"},
+			}, tsZeroS2),
+		)
+		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+		assert.Equal(t, 2, sess.MessageCount)
+		require.Len(t, msgs, 2)
+	})
+
+	t.Run("works in DAG sessions with uuids on real entries", func(t *testing.T) {
+		// Real entries form a uuid chain; the attachment has
+		// no uuid but must still surface as a user message.
+		userLine := `{"type":"user","uuid":"u1","timestamp":"` +
+			tsZero + `","message":{"content":"hi"}}`
+		assistant1 := `{"type":"assistant","uuid":"a1",` +
+			`"parentUuid":"u1","timestamp":"` + tsZeroS1 +
+			`","message":{"content":[{"type":"text",` +
+			`"text":"work"}]}}`
+		attachment := testjsonl.ClaudeQueuedCommandJSON(
+			"also do X", tsZeroS2,
+		)
+		assistant2 := `{"type":"assistant","uuid":"a2",` +
+			`"parentUuid":"a1","timestamp":` +
+			`"2024-01-01T00:00:03Z","message":{"content":[` +
+			`{"type":"text","text":"done"}]}}`
+		content := testjsonl.JoinJSONL(
+			userLine, assistant1, attachment, assistant2,
+		)
+		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+		require.Len(t, msgs, 4)
+		assert.Equal(t, "also do X", msgs[2].Content)
+		assert.Equal(t, "queued_command", msgs[2].SourceSubtype)
+		assert.Equal(t, 2, sess.UserMessageCount)
+	})
+}
+
 func TestParseClaudeSession_ParentSessionID(t *testing.T) {
 	t.Run("sessionId != fileId sets ParentSessionID", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
@@ -341,6 +453,46 @@ func TestParseClaudeSessionFrom_Incremental(t *testing.T) {
 	assert.Contains(t, newMsgs[1].Content, "got it")
 
 	assert.False(t, endedAt.IsZero())
+}
+
+func TestParseClaudeSessionFrom_QueuedCommand(t *testing.T) {
+	t.Parallel()
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("hello", tsEarly),
+		testjsonl.ClaudeAssistantJSON("hi", tsEarlyS1),
+	)
+	path := createTestFile(t, "inc-queued.jsonl", initial)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	offset := info.Size()
+
+	// Append: queued command + assistant turn.
+	appended := testjsonl.JoinJSONL(
+		testjsonl.ClaudeQueuedCommandJSON("plus do X", tsEarlyS5),
+		testjsonl.ClaudeAssistantJSON("done", tsLate),
+	)
+	f, err := os.OpenFile(
+		path, os.O_APPEND|os.O_WRONLY, 0o644,
+	)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	newMsgs, _, _, err := ParseClaudeSessionFrom(path, offset, 2)
+	require.NoError(t, err)
+	require.Len(t, newMsgs, 2)
+
+	// queued_command first (earlier timestamp), then assistant.
+	assert.Equal(t, RoleUser, newMsgs[0].Role)
+	assert.Equal(t, "plus do X", newMsgs[0].Content)
+	assert.Equal(t, "queued_command", newMsgs[0].SourceSubtype)
+	assert.Equal(t, 2, newMsgs[0].Ordinal)
+
+	assert.Equal(t, RoleAssistant, newMsgs[1].Role)
+	assert.Equal(t, 3, newMsgs[1].Ordinal)
 }
 
 func TestParseClaudeSessionFrom_SkipsNonMessages(

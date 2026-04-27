@@ -43,6 +43,17 @@ type dagEntry struct {
 	timestamp  time.Time
 }
 
+// claudeQueuedCommand is a user message Claude Code persisted as
+// type=attachment with attachment.type=queued_command — i.e. a
+// prompt the user typed while a tool call was still running.
+// These records have no uuid/parentUuid, so we collect them out
+// of band and splice them into the message stream by timestamp
+// after DAG processing completes.
+type claudeQueuedCommand struct {
+	prompt    string
+	timestamp time.Time
+}
+
 // ParseClaudeSession parses a Claude Code JSONL session file.
 // Returns one or more ParseResult structs (multiple when forks
 // are detected in the uuid/parentUuid DAG).
@@ -65,6 +76,7 @@ func ParseClaudeSession(
 	// First pass: collect all valid lines with metadata.
 	var (
 		entries         = make([]dagEntry, 0)
+		queuedCommands  []claudeQueuedCommand
 		hasAnyUUID      bool
 		allHaveUUID     bool
 		parentSessionID string
@@ -147,6 +159,16 @@ func ParseClaudeSession(
 				if tuid != "" && agentID != "" {
 					subagentMap[tuid] = "agent-" + agentID
 				}
+			}
+			continue
+		}
+
+		// Collect queued_command attachments — user messages
+		// the user typed mid-tool-call. Other attachment types
+		// (e.g. task_reminder) are intentionally dropped.
+		if entryType == "attachment" {
+			if qc, ok := extractQueuedCommand(line); ok {
+				queuedCommands = append(queuedCommands, qc)
 			}
 			continue
 		}
@@ -234,21 +256,37 @@ func ParseClaudeSession(
 		isTruncated:     isTruncated,
 	}
 
+	var (
+		results  []ParseResult
+		parseErr error
+	)
 	// If all user/assistant entries have uuids, use DAG-aware processing.
 	if hasAnyUUID && allHaveUUID {
-		return parseDAG(
+		results, parseErr = parseDAG(
+			entries, sessionID, project, machine,
+			parentSessionID, fileInfo, subagentMap,
+			globalStart, globalEnd, meta,
+		)
+	} else {
+		// Fall back to linear processing.
+		results, parseErr = parseLinear(
 			entries, sessionID, project, machine,
 			parentSessionID, fileInfo, subagentMap,
 			globalStart, globalEnd, meta,
 		)
 	}
+	if parseErr != nil {
+		return nil, parseErr
+	}
 
-	// Fall back to linear processing.
-	return parseLinear(
-		entries, sessionID, project, machine,
-		parentSessionID, fileInfo, subagentMap,
-		globalStart, globalEnd, meta,
-	)
+	// Splice queued_command attachments into the main session
+	// by timestamp. Attachments have no uuid/parentUuid and so
+	// can't participate in DAG fork detection; they belong to
+	// the original conversation timeline (results[0]).
+	if len(queuedCommands) > 0 && len(results) > 0 {
+		results[0] = applyQueuedCommands(results[0], queuedCommands)
+	}
+	return results, nil
 }
 
 // ParseClaudeSessionFrom parses only new lines from a Claude
@@ -270,8 +308,9 @@ func ParseClaudeSessionFrom(
 	startOrdinal int,
 ) ([]ParsedMessage, time.Time, int64, error) {
 	var (
-		entries   []dagEntry
-		lineIndex = startOrdinal
+		entries        []dagEntry
+		queuedCommands []claudeQueuedCommand
+		lineIndex      = startOrdinal
 		// Track latest timestamp from all lines, including
 		// non-message events (progress, queue-operation) so
 		// callers can update ended_at even when no new
@@ -287,6 +326,12 @@ func ParseClaudeSessionFrom(
 				}
 			}
 			entryType := gjson.Get(line, "type").Str
+			if entryType == "attachment" {
+				if qc, ok := extractQueuedCommand(line); ok {
+					queuedCommands = append(queuedCommands, qc)
+				}
+				return
+			}
 			if entryType != "user" &&
 				entryType != "assistant" {
 				return
@@ -310,7 +355,7 @@ func ParseClaudeSessionFrom(
 		)
 	}
 
-	if len(entries) == 0 {
+	if len(entries) == 0 && len(queuedCommands) == 0 {
 		return nil, latestTS, consumed, nil
 	}
 
@@ -324,6 +369,16 @@ func ParseClaudeSessionFrom(
 	msgs, _, endedAt := extractMessagesFrom(
 		entries, startOrdinal,
 	)
+	if len(queuedCommands) > 0 {
+		msgs = mergeQueuedCommands(
+			msgs, queuedCommands, startOrdinal,
+		)
+		for _, qc := range queuedCommands {
+			if qc.timestamp.After(endedAt) {
+				endedAt = qc.timestamp
+			}
+		}
+	}
 	// Use the latest timestamp from all lines (including
 	// non-message events) if it's later than what
 	// extractMessagesFrom found.
@@ -716,6 +771,119 @@ func parseDAG(
 	}
 
 	return results, nil
+}
+
+// extractQueuedCommand parses a Claude Code attachment entry and
+// returns the queued_command prompt if present. Other attachment
+// types (e.g. task_reminder) return ok=false. Whitespace-only or
+// empty prompts also return false to match the parser's general
+// "skip empty user content" behavior.
+func extractQueuedCommand(line string) (claudeQueuedCommand, bool) {
+	if gjson.Get(line, "attachment.type").Str != "queued_command" {
+		return claudeQueuedCommand{}, false
+	}
+	prompt := gjson.Get(line, "attachment.prompt").Str
+	if strings.TrimSpace(prompt) == "" {
+		return claudeQueuedCommand{}, false
+	}
+	return claudeQueuedCommand{
+		prompt:    prompt,
+		timestamp: extractTimestamp(line),
+	}, true
+}
+
+// applyQueuedCommands splices queued_command attachments into a
+// ParseResult by timestamp, renumbers ordinals, and refreshes
+// derived session counts. Token aggregates are unchanged because
+// queued_command entries have no usage data. Callers must ensure
+// queued is non-empty.
+func applyQueuedCommands(
+	r ParseResult, queued []claudeQueuedCommand,
+) ParseResult {
+	merged := mergeQueuedCommands(r.Messages, queued, 0)
+	firstMsg, userCount := firstMessageAndUserCount(merged)
+	r.Session.FirstMessage = firstMsg
+	r.Session.UserMessageCount = userCount
+	r.Session.MessageCount = len(merged)
+	for _, qc := range queued {
+		if qc.timestamp.After(r.Session.EndedAt) {
+			r.Session.EndedAt = qc.timestamp
+		}
+		if !qc.timestamp.IsZero() &&
+			(r.Session.StartedAt.IsZero() ||
+				qc.timestamp.Before(r.Session.StartedAt)) {
+			r.Session.StartedAt = qc.timestamp
+		}
+	}
+	r.Messages = merged
+	return r
+}
+
+// mergeQueuedCommands merges queued_command entries into messages
+// in timestamp order and renumbers ordinals starting at the given
+// offset. Both inputs are assumed to already be in chronological
+// order. Equal timestamps preserve the original message before the
+// queued command (queued commands always follow the entry that
+// triggered the tool call).
+func mergeQueuedCommands(
+	messages []ParsedMessage,
+	queued []claudeQueuedCommand,
+	startOrdinal int,
+) []ParsedMessage {
+	out := make([]ParsedMessage, 0, len(messages)+len(queued))
+	i, j := 0, 0
+	for i < len(messages) && j < len(queued) {
+		if queuedBefore(queued[j], messages[i]) {
+			out = append(out, queuedCommandMessage(queued[j]))
+			j++
+		} else {
+			out = append(out, messages[i])
+			i++
+		}
+	}
+	for ; i < len(messages); i++ {
+		out = append(out, messages[i])
+	}
+	for ; j < len(queued); j++ {
+		out = append(out, queuedCommandMessage(queued[j]))
+	}
+	for k := range out {
+		out[k].Ordinal = startOrdinal + k
+	}
+	return out
+}
+
+// queuedBefore reports whether a queued_command should sort before
+// a regular message. Zero timestamps on either side are treated
+// conservatively: a zero-timestamp message keeps its original
+// position relative to queued items.
+func queuedBefore(
+	q claudeQueuedCommand, m ParsedMessage,
+) bool {
+	if q.timestamp.IsZero() {
+		return false
+	}
+	if m.Timestamp.IsZero() {
+		return false
+	}
+	return q.timestamp.Before(m.Timestamp)
+}
+
+// queuedCommandMessage builds a ParsedMessage from a collected
+// queued_command attachment. Role stays user (the user typed
+// this) and IsSystem is false so it counts as a real user turn;
+// SourceSubtype lets the UI distinguish it from inline prompts.
+func queuedCommandMessage(
+	q claudeQueuedCommand,
+) ParsedMessage {
+	return ParsedMessage{
+		Role:          RoleUser,
+		Content:       q.prompt,
+		Timestamp:     q.timestamp,
+		ContentLength: len(q.prompt),
+		SourceType:    "user",
+		SourceSubtype: "queued_command",
+	}
 }
 
 // collapseStreamingDuplicates removes consecutive assistant entries
