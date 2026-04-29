@@ -4,7 +4,7 @@ import { clearContentCaches } from "../utils/content-parser.js";
 import { computeMainModel } from "../utils/model.js";
 
 const MESSAGE_PAGE_SIZE = 1000;
-const FULL_SESSION_MESSAGE_THRESHOLD = 20_000;
+const FULL_SESSION_MESSAGE_THRESHOLD = 3_000;
 
 interface FetchPageOptions {
   from: number;
