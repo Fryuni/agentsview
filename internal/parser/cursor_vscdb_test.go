@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -445,6 +446,52 @@ func TestParseCursorVscdbSession_EmptySession(t *testing.T) {
 	}
 	if msgs != nil {
 		t.Errorf("expected nil messages, got %v", msgs)
+	}
+}
+
+func TestFileURLToPath(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		// posix is the expected output on macOS/Linux; tests
+		// skip when running on Windows so the helper's
+		// drive-letter/UNC branches don't perturb the assertion.
+		posix string
+	}{
+		{
+			name:  "posix-absolute",
+			in:    "file:///home/user/proj",
+			posix: "/home/user/proj",
+		},
+		{
+			name:  "percent-encoded-spaces",
+			in:    "file:///home/user/My%20Project",
+			posix: "/home/user/My Project",
+		},
+		{
+			name:  "percent-encoded-unicode",
+			in:    "file:///home/user/r%C3%A9sum%C3%A9",
+			posix: "/home/user/résumé",
+		},
+		{
+			name:  "no-scheme-passthrough",
+			in:    "/no/scheme",
+			posix: "/no/scheme",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if runtime.GOOS == "windows" {
+				t.Skip("posix-only path expectations")
+			}
+			got := fileURLToPath(tt.in)
+			if got != tt.posix {
+				t.Errorf(
+					"fileURLToPath(%q) = %q, want %q",
+					tt.in, got, tt.posix,
+				)
+			}
+		})
 	}
 }
 

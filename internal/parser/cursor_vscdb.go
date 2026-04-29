@@ -365,14 +365,49 @@ func extractWorkspaceProject(dirPath string) string {
 	}
 
 	// folder is a file:// URL, e.g. "file:///home/user/proj"
+	// or "file:///C:/repo" / "file://host/share" on Windows.
 	folderPath := wj.Folder
 	if strings.HasPrefix(folderPath, "file://") {
-		if u, err := url.Parse(folderPath); err == nil {
-			folderPath = u.Path
-		}
+		folderPath = fileURLToPath(folderPath)
 	}
 
 	return ExtractProjectFromCwd(folderPath)
+}
+
+// fileURLToPath converts a "file://" URL into a native path,
+// preserving Windows drive letters and UNC host components
+// when running on Windows. Returns "" when the URL cannot be
+// parsed; returns the input unchanged when it lacks the
+// "file://" scheme.
+func fileURLToPath(raw string) string {
+	if !strings.HasPrefix(raw, "file://") {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	path, err := url.PathUnescape(u.Path)
+	if err != nil {
+		path = u.Path
+	}
+	if runtime.GOOS == "windows" {
+		// "file://host/share" → UNC: \\host\share
+		if u.Host != "" {
+			return `\\` + u.Host + filepath.FromSlash(path)
+		}
+		// "file:///C:/repo" → "/C:/repo"; strip the leading
+		// slash so the drive letter lands at the start.
+		path = strings.TrimPrefix(path, "/")
+		return filepath.FromSlash(path)
+	}
+	if u.Host != "" {
+		// Non-Windows hosts cannot mount remote UNC paths
+		// directly; fall back to the path component so
+		// project extraction still has something to work with.
+		return path
+	}
+	return path
 }
 
 // extractWorkspaceComposerIDs reads composer IDs from
