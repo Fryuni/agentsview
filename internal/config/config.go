@@ -104,9 +104,9 @@ type Config struct {
 
 	// CursorStateDB is the path to Cursor's global
 	// state.vscdb SQLite database used as primary source
-	// for tool calls and rich session metadata.
-	// Set CURSOR_STATE_DB to override. Default:
-	// ~/.config/Cursor/User/globalStorage/state.vscdb
+	// for tool calls and rich session metadata. Set
+	// CURSOR_STATE_DB to override. Default location is
+	// platform-specific; see parser.DefaultCursorStateDBPath.
 	CursorStateDB string `json:"-"`
 
 	// AgentDirs maps each AgentType to its configured
@@ -181,15 +181,12 @@ func Default() (Config, error) {
 	}
 
 	return Config{
-		Host:         "127.0.0.1",
-		Port:         8080,
-		DataDir:      dataDir,
-		DBPath:       filepath.Join(dataDir, "sessions.db"),
-		WriteTimeout: 30 * time.Second,
-		CursorStateDB: filepath.Join(
-			home,
-			".config/Cursor/User/globalStorage/state.vscdb",
-		),
+		Host:                           "127.0.0.1",
+		Port:                           8080,
+		DataDir:                        dataDir,
+		DBPath:                         filepath.Join(dataDir, "sessions.db"),
+		WriteTimeout:                   30 * time.Second,
+		CursorStateDB:                  parser.DefaultCursorStateDBPath(home),
 		AgentDirs:                      agentDirs,
 		agentDirSource:                 agentDirSource,
 		WatchExcludePatterns:           []string{".git", "node_modules", "__pycache__", ".venv", "venv", "vendor", ".next"},

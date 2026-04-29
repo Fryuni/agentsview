@@ -6429,6 +6429,126 @@ func TestSyncCursorVscdbDedup(t *testing.T) {
 	}
 }
 
+// TestSyncPathsCursorVscdbDedup verifies that processCursor
+// skips JSONL transcripts during SyncPaths/watcher events when
+// the session is already populated from vscdb. Without the
+// fallback dedup, a JSONL parse would overwrite the stored
+// session metadata (file_path, file_size, file_hash) and lose
+// the tie-back to the vscdb virtual path that syncCursorVscdb
+// uses for change detection. SyncSingleSession exercises the
+// same processCursor path and uses ReplaceSessionMessages, so
+// it surfaces both halves of the regression cleanly.
+func TestSyncPathsCursorVscdbDedup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(
+		dir, "globalStorage", "state.vscdb",
+	)
+	vscdb := createCursorVscdbHelper(t, dbPath)
+
+	sessionID := "syncpaths-dedup-001"
+	vscdb.addSession(
+		t, sessionID, "SyncPaths Dedup",
+		1704067200000, 1704067205000,
+		[]string{"b-user", "b-tool", "b-asst"},
+	)
+	vscdb.addUserBubble(t, sessionID, "b-user", "Do something")
+	vscdb.addToolBubble(
+		t, sessionID, "b-tool",
+		"read_file_v2", "call-1",
+		[]byte(`{"path":"/foo.txt"}`),
+	)
+	vscdb.addAssistantBubble(t, sessionID, "b-asst", "Done.")
+
+	cursorDir := t.TempDir()
+	jsonlDir := filepath.Join(
+		cursorDir, "myproject", "agent-transcripts", sessionID,
+	)
+	if err := os.MkdirAll(jsonlDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	jsonlPath := filepath.Join(jsonlDir, sessionID+".jsonl")
+	jsonlContent := `{"role":"user","message":{"content":[{"type":"text","text":"file-based text only"}]}}` + "\n"
+	if err := os.WriteFile(
+		jsonlPath, []byte(jsonlContent), 0o644,
+	); err != nil {
+		t.Fatalf("write jsonl: %v", err)
+	}
+
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCursor: {cursorDir},
+		},
+		Machine:       "local",
+		CursorStateDB: dbPath,
+	})
+
+	// SyncAll first to populate the DB from vscdb.
+	engine.SyncAll(context.Background(), nil)
+
+	agentviewID := "cursor:" + sessionID
+	storedBefore := database.GetSessionFilePath(agentviewID)
+	if !parser.IsCursorVscdbVirtualPath(storedBefore) {
+		t.Fatalf(
+			"setup: stored file_path = %q, want vscdb virtual path",
+			storedBefore,
+		)
+	}
+
+	// Force a re-parse of this single session via the API
+	// path that powers /sessions/:id/resync. SyncSingleSession
+	// uses writeSessionFull → ReplaceSessionMessages, so it
+	// would silently overwrite the vscdb-backed messages and
+	// file_path if processCursor accepted the JSONL.
+	if err := engine.SyncSingleSession(agentviewID); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+
+	storedAfter := database.GetSessionFilePath(agentviewID)
+	if !parser.IsCursorVscdbVirtualPath(storedAfter) {
+		t.Errorf(
+			"after re-parse: file_path = %q, want vscdb virtual path",
+			storedAfter,
+		)
+	}
+
+	msgs, err := database.GetMessages(
+		context.Background(), agentviewID, 0, 100, true,
+	)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	hasToolUse := false
+	for _, m := range msgs {
+		if m.HasToolUse {
+			hasToolUse = true
+			break
+		}
+	}
+	if !hasToolUse {
+		t.Error(
+			"vscdb tool use lost after re-parse; JSONL overwrote " +
+				"richer vscdb messages",
+		)
+	}
+
+	// Drive the watcher path too: SyncPaths must also dedup,
+	// even though writeBatch's incremental message append makes
+	// the message-loss surface narrower than SyncSingleSession.
+	engine.SyncPaths([]string{jsonlPath})
+	storedAfterWatch := database.GetSessionFilePath(agentviewID)
+	if !parser.IsCursorVscdbVirtualPath(storedAfterWatch) {
+		t.Errorf(
+			"after SyncPaths: file_path = %q, want vscdb virtual path",
+			storedAfterWatch,
+		)
+	}
+}
+
 // TestSyncCursorVscdbSubagentLinking verifies that sessions
 // with subComposerIds get parent-child relationships set.
 func TestSyncCursorVscdbSubagentLinking(t *testing.T) {

@@ -1780,6 +1780,23 @@ func (e *Engine) syncOneOpenCode(
 	return pending
 }
 
+// cursorVscdbHasSession reports whether a Cursor session has
+// already been ingested from the global state.vscdb. It
+// consults the in-memory set populated during SyncAll first;
+// otherwise (SyncPaths, watcher events) it falls back to the
+// stored session row's file_path, which is set to the vscdb
+// virtual path when the session was synced from vscdb.
+func (e *Engine) cursorVscdbHasSession(sessionID string) bool {
+	if e.cursorVscdbSynced[sessionID] {
+		return true
+	}
+	if e.cursorStateDB == "" {
+		return false
+	}
+	stored := e.db.GetSessionFilePath(sessionID)
+	return parser.IsCursorVscdbVirtualPath(stored)
+}
+
 // syncCursorVscdb syncs sessions from Cursor's global state.vscdb.
 // Returns pending writes and the set of synced session IDs (with
 // "cursor:" prefix) so the file-based sync can skip duplicates.
@@ -3113,7 +3130,11 @@ func (e *Engine) processCursor(
 	sessionID := parser.CursorSessionID(file.Path)
 
 	// Skip if already synced from vscdb (richer data source).
-	if e.cursorVscdbSynced[sessionID] {
+	// SyncAll populates cursorVscdbSynced inline; SyncPaths,
+	// SyncSingleSession, and watcher-driven syncs fall back to
+	// checking the stored session source path so a JSONL change
+	// does not overwrite the richer vscdb messages.
+	if e.cursorVscdbHasSession(sessionID) {
 		return processResult{skip: true}
 	}
 

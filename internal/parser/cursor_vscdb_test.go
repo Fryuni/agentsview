@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -342,6 +343,81 @@ func TestParseCursorVscdbSession_WithToolCall(t *testing.T) {
 	}
 }
 
+func TestParseCursorVscdbSession_PersistsToolResults(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.vscdb")
+	db := createTestVscdb(t, dbPath)
+
+	sessionID := "tool-result-session"
+	bUser := "u1"
+	bTool := "t1"
+
+	insertComposerData(t, db, sessionID, cursorComposerData{
+		ComposerID:    sessionID,
+		CreatedAt:     1000000,
+		LastUpdatedAt: 2000000,
+		FullConversationHeadersOnly: []cursorBubbleHeader{
+			{BubbleID: bUser, Type: 1},
+			{BubbleID: bTool, Type: 2},
+		},
+	})
+
+	insertBubble(t, db, sessionID, bUser, cursorBubble{
+		BubbleID:  bUser,
+		Type:      1,
+		Text:      "List the files",
+		CreatedAt: "2025-01-01T10:00:00.000Z",
+	})
+	resultJSON := json.RawMessage(`"file1.go\nfile2.go\nfile3.go"`)
+	insertBubble(t, db, sessionID, bTool, cursorBubble{
+		BubbleID:  bTool,
+		Type:      2,
+		CreatedAt: "2025-01-01T10:00:01.000Z",
+		ToolFormerData: &cursorToolFormerData{
+			Name:       "list_dir",
+			ToolCallID: "call-list-001",
+			Status:     "completed",
+			Params:     json.RawMessage(`{"path":"/src"}`),
+			Result:     resultJSON,
+		},
+	})
+
+	db.Close()
+
+	_, msgs, err := ParseCursorVscdbSession(
+		dbPath, sessionID, "proj", "local",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+
+	asst := msgs[1]
+	if len(asst.ToolResults) != 1 {
+		t.Fatalf(
+			"expected 1 tool result, got %d",
+			len(asst.ToolResults),
+		)
+	}
+	tr := asst.ToolResults[0]
+	assertEq(t, "tr.ToolUseID", tr.ToolUseID, "call-list-001")
+	if tr.ContentRaw != string(resultJSON) {
+		t.Errorf(
+			"tr.ContentRaw = %q, want %q",
+			tr.ContentRaw, string(resultJSON),
+		)
+	}
+	// "file1.go\nfile2.go\nfile3.go" decodes to 26 chars.
+	if tr.ContentLength != 26 {
+		t.Errorf(
+			"tr.ContentLength = %d, want 26",
+			tr.ContentLength,
+		)
+	}
+}
+
 func TestParseCursorVscdbSession_EmptySession(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "state.vscdb")
@@ -369,6 +445,59 @@ func TestParseCursorVscdbSession_EmptySession(t *testing.T) {
 	}
 	if msgs != nil {
 		t.Errorf("expected nil messages, got %v", msgs)
+	}
+}
+
+func TestIsCursorVscdbVirtualPath(t *testing.T) {
+	// Paths use OS-native separators since they originate from
+	// filepath.Join in production code; filepath.Base only
+	// recognizes the host OS's separator.
+	good := filepath.Join(
+		"globalStorage", "state.vscdb",
+	) + "#abc-123"
+	noSession := filepath.Join("globalStorage", "state.vscdb")
+	wrongName := filepath.Join("notavscdb") + "#abc"
+
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"with-session-id", good, true},
+		{"missing-session-id", noSession, false},
+		{"jsonl", "/some/path/file.jsonl", false},
+		{"wrong-basename", wrongName, false},
+		{"only-hash", "#abc", false},
+		{"empty", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsCursorVscdbVirtualPath(tt.path)
+			if got != tt.want {
+				t.Errorf(
+					"IsCursorVscdbVirtualPath(%q) = %v, want %v",
+					tt.path, got, tt.want,
+				)
+			}
+		})
+	}
+}
+
+func TestDefaultCursorStateDBPath(t *testing.T) {
+	got := DefaultCursorStateDBPath("/home/u")
+	if got == "" {
+		t.Fatal("expected non-empty path for non-empty home")
+	}
+	// All platforms place state.vscdb under .../Cursor/User/globalStorage/.
+	if !strings.HasSuffix(got, "globalStorage/state.vscdb") &&
+		!strings.HasSuffix(got, `globalStorage\state.vscdb`) {
+		t.Errorf("unexpected suffix on %q", got)
+	}
+	if !strings.Contains(got, "Cursor") {
+		t.Errorf("path %q missing Cursor segment", got)
+	}
+	if DefaultCursorStateDBPath("") != "" {
+		t.Error("expected empty path for empty home")
 	}
 }
 

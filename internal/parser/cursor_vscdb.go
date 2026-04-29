@@ -8,9 +8,48 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
+
+// cursorVscdbBasename is the file name of Cursor's global SQLite
+// state database. Used to detect virtual paths that point at
+// vscdb-synced sessions.
+const cursorVscdbBasename = "state.vscdb"
+
+// DefaultCursorStateDBPath returns the conventional location of
+// Cursor's global state.vscdb for the current platform. Returns
+// an empty string when home is empty.
+func DefaultCursorStateDBPath(home string) string {
+	if home == "" {
+		return ""
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(home,
+			"Library/Application Support/Cursor/User/globalStorage/state.vscdb")
+	case "windows":
+		return filepath.Join(home,
+			"AppData/Roaming/Cursor/User/globalStorage/state.vscdb")
+	default:
+		return filepath.Join(home,
+			".config/Cursor/User/globalStorage/state.vscdb")
+	}
+}
+
+// IsCursorVscdbVirtualPath reports whether path looks like a
+// Cursor vscdb virtual session path (state.vscdb#<sessionID>).
+// Used by sync code to detect sessions already populated from
+// the richer vscdb source so JSONL transcripts don't overwrite
+// them on later watcher events.
+func IsCursorVscdbVirtualPath(path string) bool {
+	idx := strings.LastIndex(path, "#")
+	if idx <= 0 {
+		return false
+	}
+	return filepath.Base(path[:idx]) == cursorVscdbBasename
+}
 
 // CursorVscdbMeta is lightweight session metadata from state.vscdb,
 // used by the sync engine to detect changes without parsing messages.
@@ -483,6 +522,13 @@ func buildCursorVscdbMessages(
 					curAsst.ToolCalls, tc,
 				)
 				curAsst.HasToolUse = true
+				if tr, ok := buildCursorToolResult(
+					b.ToolFormerData,
+				); ok {
+					curAsst.ToolResults = append(
+						curAsst.ToolResults, tr,
+					)
+				}
 			} else {
 				text := strings.TrimSpace(b.Text)
 				if text != "" {
@@ -527,6 +573,27 @@ func buildCursorToolCall(
 		Category:  NormalizeToolCategory(tf.Name),
 		InputJSON: inputJSON,
 	}
+}
+
+// buildCursorToolResult converts the result field on a
+// cursorToolFormerData into a ParsedToolResult. Returns false
+// when the tool call has no captured result so the caller can
+// skip empty entries. ContentRaw stores the raw JSON value as
+// returned by Cursor; ContentLength reflects the decoded
+// textual length so search/analytics see comparable numbers
+// to JSONL-sourced sessions.
+func buildCursorToolResult(
+	tf *cursorToolFormerData,
+) (ParsedToolResult, bool) {
+	if tf == nil || len(tf.Result) == 0 || tf.ToolCallID == "" {
+		return ParsedToolResult{}, false
+	}
+	raw := string(tf.Result)
+	return ParsedToolResult{
+		ToolUseID:     tf.ToolCallID,
+		ContentLength: len(DecodeContent(raw)),
+		ContentRaw:    raw,
+	}, true
 }
 
 // normalizeCursorParamsJSON handles the case where params is
