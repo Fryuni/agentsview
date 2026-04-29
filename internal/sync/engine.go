@@ -1833,9 +1833,15 @@ func (e *Engine) syncCursorVscdb() (
 	for _, m := range metas {
 		_, storedMtime, ok :=
 			e.db.GetFileInfoByPath(m.VirtualPath)
-		if ok && storedMtime == m.FileMtime {
+		dataVersionCurrent := e.db.GetDataVersionByPath(m.VirtualPath) >=
+			db.CurrentDataVersion()
+		if ok && storedMtime == m.FileMtime && dataVersionCurrent {
 			// Unchanged: still mark as synced to suppress
 			// file-based sync overwriting with text-only data.
+			// Also reparse when an agentsview upgrade bumped
+			// the parser data version — otherwise old vscdb
+			// sessions stay frozen until Cursor itself bumps
+			// lastUpdatedAt.
 			syncedIDs["cursor:"+m.SessionID] = true
 			continue
 		}

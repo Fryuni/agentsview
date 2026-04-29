@@ -6339,6 +6339,71 @@ func TestSyncCursorVscdbChangeDetection(t *testing.T) {
 	}
 }
 
+// TestSyncCursorVscdbReparsesOnDataVersionBump verifies that
+// vscdb sessions get re-parsed when the stored data_version
+// falls behind db.CurrentDataVersion (e.g., after an agentsview
+// upgrade), even though the vscdb meta mtime is unchanged.
+func TestSyncCursorVscdbReparsesOnDataVersionBump(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(
+		dir, "globalStorage", "state.vscdb",
+	)
+	vscdb := createCursorVscdbHelper(t, dbPath)
+
+	sessionID := "dataversion-001"
+	vscdb.addSession(
+		t, sessionID, "Data Version",
+		1704067200000, 1704067205000,
+		[]string{"b1", "b2"},
+	)
+	vscdb.addUserBubble(t, sessionID, "b1", "question")
+	vscdb.addAssistantBubble(t, sessionID, "b2", "answer")
+
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCursor: {t.TempDir()},
+		},
+		Machine:       "local",
+		CursorStateDB: dbPath,
+	})
+
+	stats1 := engine.SyncAll(context.Background(), nil)
+	if stats1.Synced < 1 {
+		t.Fatalf("first sync: Synced = %d, want >= 1", stats1.Synced)
+	}
+
+	// Simulate an agentsview upgrade by stamping the session
+	// at an older data version while leaving the vscdb file
+	// untouched. The next SyncAll must re-parse it.
+	avID := "cursor:" + sessionID
+	if err := database.SetSessionDataVersion(
+		avID, db.CurrentDataVersion()-1,
+	); err != nil {
+		t.Fatalf("SetSessionDataVersion: %v", err)
+	}
+
+	stats2 := engine.SyncAll(context.Background(), nil)
+	if stats2.Synced < 1 {
+		t.Errorf(
+			"second sync after data_version bump: "+
+				"Synced = %d, want >= 1",
+			stats2.Synced,
+		)
+	}
+	if got := database.GetSessionDataVersion(avID); got !=
+		db.CurrentDataVersion() {
+		t.Errorf(
+			"after reparse: data_version = %d, want %d",
+			got, db.CurrentDataVersion(),
+		)
+	}
+}
+
 // TestSyncCursorVscdbDedup verifies that sessions present in
 // vscdb are not overwritten by the file-based cursor sync.
 func TestSyncCursorVscdbDedup(t *testing.T) {
