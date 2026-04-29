@@ -6254,10 +6254,9 @@ func TestSyncCursorVscdbBasic(t *testing.T) {
 
 	engine := sync.NewEngine(database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentCursor: {t.TempDir()},
+			parser.AgentCursor: {t.TempDir(), dbPath},
 		},
-		Machine:       "local",
-		CursorStateDB: dbPath,
+		Machine: "local",
 	})
 
 	stats := engine.SyncAll(context.Background(), nil)
@@ -6307,10 +6306,9 @@ func TestSyncCursorVscdbChangeDetection(t *testing.T) {
 
 	engine := sync.NewEngine(database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentCursor: {t.TempDir()},
+			parser.AgentCursor: {t.TempDir(), dbPath},
 		},
-		Machine:       "local",
-		CursorStateDB: dbPath,
+		Machine: "local",
 	})
 
 	// First sync.
@@ -6367,10 +6365,9 @@ func TestSyncSingleSessionCursorVscdbOnly(t *testing.T) {
 
 	engine := sync.NewEngine(database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentCursor: {t.TempDir()},
+			parser.AgentCursor: {t.TempDir(), dbPath},
 		},
-		Machine:       "local",
-		CursorStateDB: dbPath,
+		Machine: "local",
 	})
 
 	engine.SyncAll(context.Background(), nil)
@@ -6432,6 +6429,78 @@ func TestSyncSingleSessionCursorVscdbOnly(t *testing.T) {
 	}
 }
 
+// TestSyncSingleSessionCursorVscdbPreservesParent verifies
+// that explicitly resyncing a vscdb subagent child session
+// preserves its parent_session_id / relationship_type set by
+// the bulk vscdb sync. UpsertSession unconditionally
+// overwrites those columns, so the single-session path has to
+// re-derive the parent from SubComposerIDs.
+func TestSyncSingleSessionCursorVscdbPreservesParent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(
+		dir, "globalStorage", "state.vscdb",
+	)
+	vscdb := createCursorVscdbHelper(t, dbPath)
+
+	parentID := "single-resync-parent"
+	childID := "single-resync-child"
+
+	vscdb.addSessionWithSubComposers(
+		t, parentID, "Parent",
+		1704067200000, 1704067205000,
+		[]string{"pb1", "pb2"},
+		[]string{childID},
+	)
+	vscdb.addUserBubble(t, parentID, "pb1", "parent question")
+	vscdb.addAssistantBubble(t, parentID, "pb2", "parent answer")
+
+	vscdb.addSession(
+		t, childID, "Child",
+		1704067201000, 1704067206000,
+		[]string{"cb1", "cb2"},
+	)
+	vscdb.addUserBubble(t, childID, "cb1", "child question")
+	vscdb.addAssistantBubble(t, childID, "cb2", "child answer")
+
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCursor: {t.TempDir(), dbPath},
+		},
+		Machine: "local",
+	})
+
+	engine.SyncAll(context.Background(), nil)
+
+	parentAv := "cursor:" + parentID
+	childAv := "cursor:" + childID
+
+	// Resync the child explicitly. Without re-deriving the
+	// parent, UpsertSession would clear ParentSessionID.
+	if err := engine.SyncSingleSession(childAv); err != nil {
+		t.Fatalf("SyncSingleSession child: %v", err)
+	}
+	assertSessionState(t, database, childAv,
+		func(sess *db.Session) {
+			if sess.ParentSessionID == nil ||
+				*sess.ParentSessionID != parentAv {
+				got := ""
+				if sess.ParentSessionID != nil {
+					got = *sess.ParentSessionID
+				}
+				t.Errorf(
+					"after single resync: ParentSessionID = %q, want %q",
+					got, parentAv,
+				)
+			}
+		},
+	)
+}
+
 // TestSyncCursorVscdbReparsesOnDataVersionBump verifies that
 // vscdb sessions get re-parsed when the stored data_version
 // falls behind db.CurrentDataVersion (e.g., after an agentsview
@@ -6459,10 +6528,9 @@ func TestSyncCursorVscdbReparsesOnDataVersionBump(t *testing.T) {
 
 	engine := sync.NewEngine(database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentCursor: {t.TempDir()},
+			parser.AgentCursor: {t.TempDir(), dbPath},
 		},
-		Machine:       "local",
-		CursorStateDB: dbPath,
+		Machine: "local",
 	})
 
 	stats1 := engine.SyncAll(context.Background(), nil)
@@ -6546,10 +6614,9 @@ func TestSyncCursorVscdbDedup(t *testing.T) {
 
 	engine := sync.NewEngine(database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentCursor: {cursorDir},
+			parser.AgentCursor: {cursorDir, dbPath},
 		},
-		Machine:       "local",
-		CursorStateDB: dbPath,
+		Machine: "local",
 	})
 
 	engine.SyncAll(context.Background(), nil)
@@ -6639,10 +6706,9 @@ func TestSyncPathsCursorVscdbDedup(t *testing.T) {
 
 	engine := sync.NewEngine(database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentCursor: {cursorDir},
+			parser.AgentCursor: {cursorDir, dbPath},
 		},
-		Machine:       "local",
-		CursorStateDB: dbPath,
+		Machine: "local",
 	})
 
 	// SyncAll first to populate the DB from vscdb.
@@ -6743,10 +6809,9 @@ func TestSyncCursorVscdbSubagentLinking(t *testing.T) {
 
 	engine := sync.NewEngine(database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentCursor: {t.TempDir()},
+			parser.AgentCursor: {t.TempDir(), dbPath},
 		},
-		Machine:       "local",
-		CursorStateDB: dbPath,
+		Machine: "local",
 	})
 
 	engine.SyncAll(context.Background(), nil)

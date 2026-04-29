@@ -111,7 +111,6 @@ func runServe(cfg config.Config) {
 			AgentDirs:               cfg.AgentDirs,
 			Machine:                 "local",
 			BlockedResultCategories: cfg.ResultContentBlockedCategories,
-			CursorStateDB:           cfg.CursorStateDB,
 			Emitter:                 broadcaster,
 		})
 

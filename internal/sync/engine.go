@@ -68,10 +68,6 @@ type EngineConfig struct {
 	// that wrote data. Safe to leave nil (e.g., in PG serve mode
 	// where the engine is not run).
 	Emitter Emitter
-	// CursorStateDB is the path to Cursor's global
-	// state.vscdb SQLite database. Empty string disables
-	// vscdb-based Cursor sync.
-	CursorStateDB string
 }
 
 // Engine orchestrates session file discovery and sync.
@@ -81,7 +77,6 @@ type Engine struct {
 	agentDirs               map[parser.AgentType][]string
 	machine                 string
 	blockedResultCategories map[string]bool
-	cursorStateDB           string
 	syncMu                  gosync.Mutex // serializes all sync operations
 	mu                      gosync.RWMutex
 	lastSync                time.Time
@@ -141,7 +136,6 @@ func NewEngine(
 		agentDirs:               dirs,
 		machine:                 cfg.Machine,
 		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
-		cursorStateDB:           cfg.CursorStateDB,
 		skipCache:               skipCache,
 		ephemeral:               cfg.Ephemeral,
 		idPrefix:                cfg.IDPrefix,
@@ -555,7 +549,7 @@ func (e *Engine) classifyOnePath(
 	//   <cursorDir>/<project>/agent-transcripts/<uuid>.{txt,jsonl}
 	//   <cursorDir>/<project>/agent-transcripts/<uuid>/<uuid>.{txt,jsonl}
 	for _, cursorDir := range e.agentDirs[parser.AgentCursor] {
-		if cursorDir == "" {
+		if cursorDir == "" || parser.IsCursorVscdbPath(cursorDir) {
 			continue
 		}
 		if rel, ok := isUnder(cursorDir, path); ok {
@@ -1780,6 +1774,15 @@ func (e *Engine) syncOneOpenCode(
 	return pending
 }
 
+// cursorVscdbPath returns the configured Cursor state.vscdb
+// path from the cursor agent's dir slot, or "" when no vscdb
+// is configured / available on disk.
+func (e *Engine) cursorVscdbPath() string {
+	return parser.FindCursorVscdb(
+		e.agentDirs[parser.AgentCursor],
+	)
+}
+
 // cursorVscdbHasSession reports whether a Cursor session has
 // already been ingested from the global state.vscdb. It
 // consults the in-memory set populated during SyncAll first;
@@ -1790,7 +1793,7 @@ func (e *Engine) cursorVscdbHasSession(sessionID string) bool {
 	if e.cursorVscdbSynced[sessionID] {
 		return true
 	}
-	if e.cursorStateDB == "" {
+	if e.cursorVscdbPath() == "" {
 		return false
 	}
 	stored := e.db.GetSessionFilePath(sessionID)
@@ -1803,7 +1806,7 @@ func (e *Engine) cursorVscdbHasSession(sessionID string) bool {
 func (e *Engine) syncCursorVscdb() (
 	[]pendingWrite, map[string]bool,
 ) {
-	dbPath := e.cursorStateDB
+	dbPath := e.cursorVscdbPath()
 	if dbPath == "" {
 		return nil, nil
 	}
@@ -4176,6 +4179,9 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 	case parser.AgentCursor:
 		// Support both flat and nested transcript layouts.
 		for _, cursorDir := range e.agentDirs[parser.AgentCursor] {
+			if parser.IsCursorVscdbPath(cursorDir) {
+				continue
+			}
 			rel, ok := isUnder(cursorDir, path)
 			if !ok {
 				continue
@@ -4257,14 +4263,15 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 // FindSourceFile cannot map the virtual path back to a real
 // file.
 func (e *Engine) syncSingleCursorVscdb(sessionID string) error {
-	if e.cursorStateDB == "" {
+	dbPath := e.cursorVscdbPath()
+	if dbPath == "" {
 		return fmt.Errorf(
-			"cursor state.vscdb path not configured",
+			"cursor state.vscdb not found in configured paths",
 		)
 	}
 	rawID := strings.TrimPrefix(sessionID, "cursor:")
 
-	metas, err := parser.ListCursorVscdbSessions(e.cursorStateDB)
+	metas, err := parser.ListCursorVscdbSessions(dbPath)
 	if err != nil {
 		return fmt.Errorf(
 			"list cursor vscdb sessions: %w", err,
@@ -4272,10 +4279,21 @@ func (e *Engine) syncSingleCursorVscdb(sessionID string) error {
 	}
 
 	var meta *parser.CursorVscdbMeta
+	parentID := ""
 	for i := range metas {
 		if metas[i].SessionID == rawID {
 			meta = &metas[i]
-			break
+		}
+		// Detect parent: if rawID appears in another meta's
+		// SubComposerIDs, that meta is its parent. Same scan
+		// syncCursorVscdb runs in bulk; mirroring it here so
+		// explicit single-session resync does not clear
+		// parent_session_id / relationship_type via the
+		// UpsertSession overwrite.
+		for _, child := range metas[i].SubComposerIDs {
+			if child == rawID {
+				parentID = metas[i].SessionID
+			}
 		}
 	}
 	if meta == nil {
@@ -4285,7 +4303,7 @@ func (e *Engine) syncSingleCursorVscdb(sessionID string) error {
 	}
 
 	sess, msgs, err := parser.ParseCursorVscdbSession(
-		e.cursorStateDB, meta.SessionID,
+		dbPath, meta.SessionID,
 		meta.Project, e.machine,
 	)
 	if err != nil {
@@ -4296,6 +4314,11 @@ func (e *Engine) syncSingleCursorVscdb(sessionID string) error {
 	}
 	if sess == nil {
 		return nil
+	}
+
+	if parentID != "" {
+		sess.ParentSessionID = "cursor:" + parentID
+		sess.RelationshipType = parser.RelSubagent
 	}
 
 	if err := e.writeSessionFull(

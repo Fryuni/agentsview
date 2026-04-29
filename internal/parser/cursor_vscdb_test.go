@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -627,22 +626,83 @@ func TestIsCursorVscdbVirtualPath(t *testing.T) {
 	}
 }
 
-func TestDefaultCursorStateDBPath(t *testing.T) {
-	got := DefaultCursorStateDBPath("/home/u")
-	if got == "" {
-		t.Fatal("expected non-empty path for non-empty home")
+func TestIsCursorVscdbPath(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{
+			"linux-default",
+			filepath.Join(
+				".config", "Cursor", "User",
+				"globalStorage", "state.vscdb",
+			),
+			true,
+		},
+		{
+			"macos-default",
+			filepath.Join(
+				"Library", "Application Support", "Cursor",
+				"User", "globalStorage", "state.vscdb",
+			),
+			true,
+		},
+		{"transcripts-dir", ".cursor/projects", false},
+		{"jsonl", "/some/path/file.jsonl", false},
+		{"empty", "", false},
 	}
-	// All platforms place state.vscdb under .../Cursor/User/globalStorage/.
-	if !strings.HasSuffix(got, "globalStorage/state.vscdb") &&
-		!strings.HasSuffix(got, `globalStorage\state.vscdb`) {
-		t.Errorf("unexpected suffix on %q", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsCursorVscdbPath(
+				tt.path,
+			); got != tt.want {
+				t.Errorf(
+					"IsCursorVscdbPath(%q) = %v, want %v",
+					tt.path, got, tt.want,
+				)
+			}
+		})
 	}
-	if !strings.Contains(got, "Cursor") {
-		t.Errorf("path %q missing Cursor segment", got)
+}
+
+func TestFindCursorVscdb(t *testing.T) {
+	dir := t.TempDir()
+	good := filepath.Join(dir, "state.vscdb")
+	if err := os.WriteFile(good, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed vscdb: %v", err)
 	}
-	if DefaultCursorStateDBPath("") != "" {
-		t.Error("expected empty path for empty home")
+	missing := filepath.Join(dir, "missing", "state.vscdb")
+	notVscdb := filepath.Join(dir, "transcripts")
+	if err := os.MkdirAll(notVscdb, 0o755); err != nil {
+		t.Fatalf("seed dir: %v", err)
 	}
+
+	t.Run("returns-existing-vscdb", func(t *testing.T) {
+		got := FindCursorVscdb([]string{notVscdb, good})
+		if got != good {
+			t.Errorf("got %q, want %q", got, good)
+		}
+	})
+	t.Run("skips-missing", func(t *testing.T) {
+		if got := FindCursorVscdb(
+			[]string{missing},
+		); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+	t.Run("skips-non-vscdb", func(t *testing.T) {
+		if got := FindCursorVscdb(
+			[]string{notVscdb},
+		); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+	t.Run("empty-input", func(t *testing.T) {
+		if got := FindCursorVscdb(nil); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
 }
 
 func TestNormalizeCursorVscdbTool(t *testing.T) {

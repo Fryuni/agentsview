@@ -15,27 +15,33 @@ import (
 
 // cursorVscdbBasename is the file name of Cursor's global SQLite
 // state database. Used to detect virtual paths that point at
-// vscdb-synced sessions.
+// vscdb-synced sessions and to identify vscdb entries within
+// the cursor agent's configured paths.
 const cursorVscdbBasename = "state.vscdb"
 
-// DefaultCursorStateDBPath returns the conventional location of
-// Cursor's global state.vscdb for the current platform. Returns
-// an empty string when home is empty.
-func DefaultCursorStateDBPath(home string) string {
-	if home == "" {
-		return ""
+// IsCursorVscdbPath reports whether path points at a Cursor
+// state.vscdb file (basename match). Used by sync code to
+// pick the vscdb out of the cursor agent's configured paths
+// and by discovery to skip non-transcripts entries.
+func IsCursorVscdbPath(path string) bool {
+	return filepath.Base(path) == cursorVscdbBasename
+}
+
+// FindCursorVscdb returns the first existing state.vscdb path
+// in the cursor agent's configured paths, or "" when none
+// exist. The agent registry lists the vscdb default for each
+// platform and only the matching one resolves at runtime.
+func FindCursorVscdb(cursorPaths []string) string {
+	for _, p := range cursorPaths {
+		if !IsCursorVscdbPath(p) {
+			continue
+		}
+		if info, err := os.Stat(p); err == nil &&
+			!info.IsDir() {
+			return p
+		}
 	}
-	switch runtime.GOOS {
-	case "darwin":
-		return filepath.Join(home,
-			"Library/Application Support/Cursor/User/globalStorage/state.vscdb")
-	case "windows":
-		return filepath.Join(home,
-			"AppData/Roaming/Cursor/User/globalStorage/state.vscdb")
-	default:
-		return filepath.Join(home,
-			".config/Cursor/User/globalStorage/state.vscdb")
-	}
+	return ""
 }
 
 // IsCursorVscdbVirtualPath reports whether path looks like a
