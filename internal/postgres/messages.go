@@ -517,6 +517,15 @@ func (s *Store) attachToolResultEventsBatch(
 
 // scanPGMessages scans message rows from PostgreSQL,
 // converting TIMESTAMPTZ to string.
+//
+// The PG messages table has no id column (composite PK on
+// session_id, ordinal), so we synthesize Message.ID = int64(ordinal)
+// to match the convention used by TurnRow.MessageID and
+// CallRow.MessageID in session_timing.go. The frontend keys
+// {#each messages (message.id)} and looks up turns via
+// turnByMessage.get(message.id); both depend on Message.ID being
+// non-zero, unique within a session, and equal to int64(ordinal)
+// so it joins with TurnRow.MessageID.
 func scanPGMessages(rows interface {
 	Next() bool
 	Scan(dest ...any) error
@@ -544,6 +553,7 @@ func scanPGMessages(rows interface {
 				"scanning message: %w", err,
 			)
 		}
+		m.ID = int64(m.Ordinal)
 		if ts != nil {
 			m.Timestamp = FormatISO8601(*ts)
 		}

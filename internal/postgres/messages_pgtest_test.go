@@ -846,3 +846,123 @@ func TestGetMessagesIsSystemField(t *testing.T) {
 		t.Errorf("GetAllMessages: all[1].IsSystem = false, want true")
 	}
 }
+
+// TestGetMessagesIDPopulated regresses #439: scanPGMessages must
+// populate db.Message.ID with a unique-within-session value that
+// matches int64(ordinal). The frontend keys {#each messages
+// (message.id)} on it, and joins with TurnRow.MessageID via
+// turnByMessage.get(message.id) — so collisions or zero-fill
+// crash the message panel with each_key_duplicate. PG has no id
+// column (composite PK on session_id, ordinal), so the synthetic
+// ID matches the existing convention used by TurnRow.MessageID
+// and CallRow.MessageID in session_timing.go.
+func TestGetMessagesIDPopulated(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_msg_id_test"
+	pg, err := Open(pgURL, schema, true)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer pg.Close()
+
+	ctx := context.Background()
+	if _, err := pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`); err != nil {
+		t.Fatalf("drop schema: %v", err)
+	}
+	if err := EnsureSchema(ctx, pg, schema); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+
+	if _, err := pg.Exec(`
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, message_count, user_message_count)
+		VALUES
+			('msg-id-001', 'test-machine', 'test-project', 'claude',
+			 'hello', '2026-03-16T10:00:00Z'::timestamptz, 4, 2)`,
+	); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	if _, err := pg.Exec(`
+		INSERT INTO messages
+			(session_id, ordinal, role, content,
+			 timestamp, content_length, has_tool_use)
+		VALUES
+			('msg-id-001', 0, 'user', 'first',
+			 '2026-03-16T10:00:00Z'::timestamptz, 5, FALSE),
+			('msg-id-001', 1, 'assistant', 'second',
+			 '2026-03-16T10:00:01Z'::timestamptz, 6, TRUE),
+			('msg-id-001', 2, 'user', 'third',
+			 '2026-03-16T10:00:02Z'::timestamptz, 5, FALSE),
+			('msg-id-001', 3, 'assistant', 'fourth',
+			 '2026-03-16T10:00:03Z'::timestamptz, 6, TRUE)`,
+	); err != nil {
+		t.Fatalf("insert messages: %v", err)
+	}
+
+	store, err := NewStore(pgURL, schema, true)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	check := func(t *testing.T, label string, msgs []db.Message) {
+		t.Helper()
+		if len(msgs) != 4 {
+			t.Fatalf("%s: got %d messages, want 4", label, len(msgs))
+		}
+		seen := map[int64]int{}
+		for i, m := range msgs {
+			if prev, ok := seen[m.ID]; ok {
+				t.Errorf("%s: msgs[%d].ID == msgs[%d].ID == %d (duplicate keys would crash Svelte each, regression of #439)",
+					label, prev, i, m.ID)
+			}
+			seen[m.ID] = i
+			if m.ID != int64(m.Ordinal) {
+				t.Errorf("%s: msgs[%d].ID = %d, want int64(ordinal=%d) for parity with TurnRow.MessageID",
+					label, i, m.ID, m.Ordinal)
+			}
+		}
+	}
+
+	msgs, err := store.GetMessages(ctx, "msg-id-001", 0, 100, true)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	check(t, "GetMessages", msgs)
+
+	all, err := store.GetAllMessages(ctx, "msg-id-001")
+	if err != nil {
+		t.Fatalf("GetAllMessages: %v", err)
+	}
+	check(t, "GetAllMessages", all)
+
+	// Cross-check: every TurnRow.MessageID must correspond to a message
+	// returned by GetMessages with the same ID. The frontend looks up
+	// turns via turnByMessage.get(message.id); messages without a turn
+	// are allowed (lookup returns undefined), but a turn whose
+	// MessageID has no matching message means the join will silently
+	// drop timing data.
+	timing, err := store.GetSessionTiming(ctx, "msg-id-001")
+	if err != nil {
+		t.Fatalf("GetSessionTiming: %v", err)
+	}
+	if timing == nil {
+		t.Fatal("GetSessionTiming returned nil")
+	}
+	if len(timing.Turns) == 0 {
+		t.Fatal("GetSessionTiming.Turns empty; cannot verify cross-check")
+	}
+	msgIDs := map[int64]bool{}
+	for _, m := range msgs {
+		msgIDs[m.ID] = true
+	}
+	for _, turn := range timing.Turns {
+		if !msgIDs[turn.MessageID] {
+			t.Errorf("turn.MessageID=%d has no matching message.ID; "+
+				"frontend turnByMessage join will drop this turn",
+				turn.MessageID)
+		}
+	}
+}
