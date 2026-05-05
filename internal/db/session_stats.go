@@ -19,13 +19,15 @@ import (
 // StatsFilter mirrors the service-layer StatsFilter but lives in db
 // because db functions take typed filters without cross-package deps.
 type StatsFilter struct {
-	Since           string
-	Until           string
-	Agent           string
-	IncludeProjects []string
-	ExcludeProjects []string
-	Timezone        string
-	GHToken         string
+	Since                 string
+	Until                 string
+	Agent                 string
+	IncludeProjects       []string
+	ExcludeProjects       []string
+	Timezone              string
+	IncludeGitOutcomes    bool
+	IncludeGitHubOutcomes bool
+	GHToken               string
 }
 
 // GetSessionStats computes the v1 session-stats JSON response.
@@ -105,8 +107,10 @@ func (db *DB) GetSessionStats(
 		return nil, fmt.Errorf("computing adoption: %w", err)
 	}
 
-	if err := db.computeOutcomeStats(ctx, stats, f, from, to, rows); err != nil {
-		return nil, fmt.Errorf("computing outcome stats: %w", err)
+	if f.IncludeGitOutcomes || f.IncludeGitHubOutcomes {
+		if err := db.computeOutcomeStats(ctx, stats, f, from, to, rows); err != nil {
+			return nil, fmt.Errorf("computing outcome stats: %w", err)
+		}
 	}
 
 	return stats, nil

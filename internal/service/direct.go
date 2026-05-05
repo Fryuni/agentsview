@@ -373,12 +373,14 @@ func (b *directBackend) Stats(
 		return nil, db.ErrReadOnly
 	}
 	return b.local.GetSessionStats(ctx, db.StatsFilter{
-		Since:           f.Since,
-		Until:           f.Until,
-		Agent:           f.Agent,
-		IncludeProjects: f.IncludeProjects,
-		ExcludeProjects: f.ExcludeProjects,
-		Timezone:        f.Timezone,
-		GHToken:         f.GHToken,
+		Since:                 f.Since,
+		Until:                 f.Until,
+		Agent:                 f.Agent,
+		IncludeProjects:       f.IncludeProjects,
+		ExcludeProjects:       f.ExcludeProjects,
+		Timezone:              f.Timezone,
+		IncludeGitOutcomes:    f.IncludeGitOutcomes,
+		IncludeGitHubOutcomes: f.IncludeGitHubOutcomes,
+		GHToken:               f.GHToken,
 	})
 }

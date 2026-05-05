@@ -111,12 +111,18 @@ Features:
 
 ## Session Stats
 
-`agentsview stats` emits window-scoped analytics over recorded sessions:
-totals, archetypes (automation vs. quick/standard/deep/marathon), distributions
-for session duration, user-message count, peak context, and tools-per-turn, plus
+`agentsview stats` emits window-scoped analytics over recorded sessions: totals,
+archetypes (automation vs. quick/standard/deep/marathon), distributions for
+session duration, user-message count, peak context, and tools-per-turn, plus
 cache economics, tool/model/agent mix, and a temporal hourly breakdown. The
 `--format json` output follows a versioned v1 schema (`schema_version: 1`)
 suitable for downstream consumers.
+
+By default, `stats` only reads the local SQLite archive. Git-derived outcome
+metrics are opt-in because they can be slow or brittle on large/missing repos:
+use `--include-git-outcomes` for commits/LOC/files changed, and
+`--include-github-outcomes` for GitHub PR counts via `gh` (this also enables git
+outcomes).
 
 ```bash
 # Human-readable summary over the last 28 days
@@ -127,6 +133,9 @@ agentsview stats --format json --since 2026-04-01 --until 2026-04-15
 
 # Restrict to one agent and inspect the schema
 agentsview stats --format json --agent claude | jq '.schema_version'
+
+# Include expensive local git outcome metrics explicitly
+agentsview stats --include-git-outcomes
 ```
 
 ## Session Browser

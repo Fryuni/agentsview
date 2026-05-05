@@ -233,6 +233,18 @@ func TestFmtInt64(t *testing.T) {
 	}
 }
 
+func TestStatsCommand_OutcomeFlagsRegistered(t *testing.T) {
+	cmd := newStatsCommand()
+	for _, name := range []string{
+		"include-git-outcomes",
+		"include-github-outcomes",
+	} {
+		if cmd.Flags().Lookup(name) == nil {
+			t.Fatalf("missing --%s flag", name)
+		}
+	}
+}
+
 // updateGolden toggles regeneration of stats_golden.json.
 // Pass `go test ./cmd/agentsview -run TestStatsGolden -update`
 // after intentionally changing the fixture or the stats pipeline.

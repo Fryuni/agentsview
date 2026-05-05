@@ -23,8 +23,9 @@ import (
 
 func newStatsCommand() *cobra.Command {
 	var (
-		since, until, agent, timezone    string
-		includeProjects, excludeProjects []string
+		since, until, agent, timezone         string
+		includeProjects, excludeProjects      []string
+		includeGitOutcomes, includeGHOutcomes bool
 	)
 	cmd := &cobra.Command{
 		Use:          "stats",
@@ -48,14 +49,23 @@ func newStatsCommand() *cobra.Command {
 			if agentFilter == "all" {
 				agentFilter = ""
 			}
+			if includeGHOutcomes {
+				includeGitOutcomes = true
+			}
+			var ghToken string
+			if includeGHOutcomes {
+				ghToken = resolveGitHubToken(cmd.Context())
+			}
 			stats, err := svc.Stats(cmd.Context(), service.StatsFilter{
-				Since:           since,
-				Until:           until,
-				Agent:           agentFilter,
-				IncludeProjects: includeProjects,
-				ExcludeProjects: excludeProjects,
-				Timezone:        timezone,
-				GHToken:         resolveGitHubToken(cmd.Context()),
+				Since:                 since,
+				Until:                 until,
+				Agent:                 agentFilter,
+				IncludeProjects:       includeProjects,
+				ExcludeProjects:       excludeProjects,
+				Timezone:              timezone,
+				IncludeGitOutcomes:    includeGitOutcomes,
+				IncludeGitHubOutcomes: includeGHOutcomes,
+				GHToken:               ghToken,
 			})
 			if err != nil {
 				return err
@@ -72,6 +82,7 @@ func newStatsCommand() *cobra.Command {
 	registerStatsFlags(cmd,
 		&since, &until, &agent, &timezone,
 		&includeProjects, &excludeProjects,
+		&includeGitOutcomes, &includeGHOutcomes,
 	)
 	return cmd
 }
@@ -107,6 +118,7 @@ func registerStatsFlags(
 	cmd *cobra.Command,
 	since, until, agent, timezone *string,
 	includeProjects, excludeProjects *[]string,
+	includeGitOutcomes, includeGHOutcomes *bool,
 ) {
 	f := cmd.Flags()
 	f.StringVar(since, "since", "28d",
@@ -121,6 +133,10 @@ func registerStatsFlags(
 		"Exclude these projects (repeatable)")
 	f.StringVar(timezone, "timezone", "",
 		"Timezone for temporal (default: local system timezone)")
+	f.BoolVar(includeGitOutcomes, "include-git-outcomes", false,
+		"Include git-derived outcome stats (commits, LOC, files)")
+	f.BoolVar(includeGHOutcomes, "include-github-outcomes", false,
+		"Include GitHub PR outcome stats via gh (implies --include-git-outcomes)")
 }
 
 // openStatsService opens a SessionService scoped to the local SQLite

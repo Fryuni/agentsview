@@ -2787,6 +2787,30 @@ func statsCommitFile(
 	statsRunGit(t, repo, env, "commit", "-q", "-m", message)
 }
 
+// TestGetSessionStats_OutcomeStats_DefaultDisabled verifies that plain
+// stats runs do not touch git-derived outcome aggregation, even when
+// sessions carry cwd values inside a real repository.
+func TestGetSessionStats_OutcomeStats_DefaultDisabled(t *testing.T) {
+	skipIfNoGit(t)
+	d := testDB(t)
+	ctx := context.Background()
+
+	repo := statsInitRepo(t)
+	statsCommitFile(t, repo, "a.txt", "a1\n", "c1")
+	insertSessionFixture(t, d, sessionFixture{
+		id: "os-default", agent: "claude", userMsgs: 5,
+		startedAt: hoursAgo(5), cwd: repo,
+	})
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+	if stats.OutcomeStats != nil {
+		t.Fatalf("OutcomeStats: got %+v want nil", stats.OutcomeStats)
+	}
+}
+
 // TestGetSessionStats_OutcomeStats_Happy seeds sessions whose cwd
 // points inside a real fixture repo and asserts that the outcome_stats
 // section surfaces the author-filtered commit totals. PRsOpened /
@@ -2823,7 +2847,9 @@ func TestGetSessionStats_OutcomeStats_Happy(t *testing.T) {
 		startedAt: hoursAgo(4), cwd: sub,
 	})
 
-	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	stats, err := d.GetSessionStats(ctx, StatsFilter{
+		Since: "28d", IncludeGitOutcomes: true,
+	})
 	if err != nil {
 		t.Fatalf("GetSessionStats: %v", err)
 	}
