@@ -243,7 +243,20 @@ class MessagesStore {
       signal,
     });
     if (pages.length > 0) {
-      this.messages.push(...pages);
+      const updates = new Map(
+        pages.map((m) => [m.ordinal, m]),
+      );
+      const existingOrdinals = new Set(
+        this.messages.map((m) => m.ordinal),
+      );
+      const appended = pages.filter(
+        (m) => !existingOrdinals.has(m.ordinal),
+      );
+      clearContentCaches();
+      this.messages = [
+        ...this.messages.map((m) => updates.get(m.ordinal) ?? m),
+        ...appended,
+      ];
     }
   }
 
@@ -416,7 +429,7 @@ class MessagesStore {
       if (newCount > oldCount && this.messages.length > 0) {
         const lastOrdinal =
           this.messages[this.messages.length - 1]!.ordinal;
-        await this.loadFrom(id, lastOrdinal + 1, signal);
+        await this.loadFrom(id, lastOrdinal, signal);
         if (this.sessionId !== id) return;
 
         const newest =

@@ -475,6 +475,65 @@ describe('MessagesStore', () => {
     ).toEqual([{ type: 'text', content: 'bravo2' }]);
   });
 
+  it('should refresh the loaded tail when appending new messages', async () => {
+    vi.mocked(api.getSession).mockResolvedValue(
+      makeSession('s1', 2),
+    );
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([makeMessage(0), makeMessage(1)]),
+    );
+
+    await messages.loadSession('s1');
+    expect(messages.messages[1]!.content).toBe('msg 1');
+    expect(
+      parseContent(
+        messages.messages[1]!.content,
+        messages.messages[1]!.has_tool_use,
+        messages.messages[1]!.id,
+        messages.messages[1]!.content_length,
+      ),
+    ).toEqual([{ type: 'text', content: 'msg 1' }]);
+
+    const updatedTail = {
+      ...makeMessage(1),
+      content: 'tail!!',
+      content_length: 6,
+    };
+    vi.mocked(api.getSession).mockResolvedValueOnce(
+      makeSession('s1', 3),
+    );
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([updatedTail, makeMessage(2)]),
+    );
+
+    await messages.reload();
+
+    expect(messages.messageCount).toBe(3);
+    expect(messages.messages.map((m) => m.ordinal)).toEqual([
+      0, 1, 2,
+    ]);
+    expect(messages.messages[1]!.content).toBe('tail!!');
+    expect(
+      parseContent(
+        messages.messages[1]!.content,
+        messages.messages[1]!.has_tool_use,
+        messages.messages[1]!.id,
+        messages.messages[1]!.content_length,
+      ),
+    ).toEqual([{ type: 'text', content: 'tail!!' }]);
+    expect(vi.mocked(api.getMessages)).toHaveBeenLastCalledWith(
+      's1',
+      expect.objectContaining({
+        from: 1,
+        limit: 1000,
+        direction: 'asc',
+      }),
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
+    );
+  });
+
   it('should not update messageCount prematurely if incremental fetch fails and triggers full reload', async () => {
     // 1. Initial State: Session 's1' with 2 messages
     vi.mocked(api.getSession).mockResolvedValue(
