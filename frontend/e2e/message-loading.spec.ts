@@ -177,6 +177,25 @@ test.describe("Message loading", () => {
     }
   });
 
+  test("follow latest exits on pointer intent inside message rows", async ({
+    page,
+  }) => {
+    const sp = new SessionsPage(page);
+    await sp.goto();
+    await sp.selectFirstSession();
+
+    const follow = page.getByLabel("Follow latest messages");
+    await follow.click();
+    await expect(follow).toHaveAttribute("aria-pressed", "true");
+
+    await sp.messageRows.first().dispatchEvent("pointerdown", {
+      bubbles: true,
+      pointerType: "mouse",
+    });
+
+    await expect(follow).toHaveAttribute("aria-pressed", "false");
+  });
+
   test("follow latest exits on global keyboard message navigation", async ({
     page,
   }) => {

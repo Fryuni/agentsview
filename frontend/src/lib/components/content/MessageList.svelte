@@ -216,11 +216,6 @@
   }
 
   function manualScrollIntent(node: HTMLElement) {
-    const handlePointerDown = (event: PointerEvent) => {
-      if (event.target === node) {
-        handleManualScrollIntent();
-      }
-    };
     const handleKeydown = (event: KeyboardEvent) => {
       if (
         [
@@ -239,7 +234,7 @@
     node.addEventListener("wheel", handleManualScrollIntent, {
       passive: true,
     });
-    node.addEventListener("pointerdown", handlePointerDown);
+    node.addEventListener("pointerdown", handleManualScrollIntent);
     node.addEventListener("touchmove", handleManualScrollIntent, {
       passive: true,
     });
@@ -252,7 +247,7 @@
         );
         node.removeEventListener(
           "pointerdown",
-          handlePointerDown,
+          handleManualScrollIntent,
         );
         node.removeEventListener(
           "touchmove",
