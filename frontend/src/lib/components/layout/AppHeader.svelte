@@ -383,6 +383,19 @@
 
       <button
         class="header-btn"
+        class:active={ui.followLatest}
+        onclick={() => ui.setFollowLatest(!ui.followLatest)}
+        title={ui.followLatest ? "Stop following latest messages" : "Follow latest messages"}
+        aria-label="Follow latest messages"
+        aria-pressed={ui.followLatest}
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M8 13.5a.5.5 0 01-.354-.146l-4-4a.5.5 0 11.708-.708L7.5 11.793V2.5a.5.5 0 011 0v9.293l3.146-3.147a.5.5 0 01.708.708l-4 4A.5.5 0 018 13.5z"/>
+        </svg>
+      </button>
+
+      <button
+        class="header-btn"
         onclick={() => ui.toggleSort()}
         title="Toggle sort order (o)"
         aria-label="Toggle sort order"

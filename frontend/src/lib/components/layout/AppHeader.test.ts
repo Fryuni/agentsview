@@ -38,6 +38,7 @@ describe("AppHeader export actions", () => {
     vi.clearAllMocks();
     sessions.activeSessionId = "sess-123";
     ui.isMobileViewport = false;
+    ui.followLatest = false;
   });
 
   afterEach(() => {
@@ -74,5 +75,22 @@ describe("AppHeader export actions", () => {
     expect(mocks.copyToClipboard).toHaveBeenCalledWith(
       "http://localhost:3000/api/v1/sessions/sess-123/md",
     );
+  });
+
+  it("toggles follow latest from the session header", async () => {
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+
+    const followButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Follow latest messages"]',
+    );
+    expect(followButton).not.toBeNull();
+    expect(followButton!.classList.contains("active")).toBe(false);
+
+    followButton!.click();
+    await tick();
+
+    expect(ui.followLatest).toBe(true);
+    expect(followButton!.classList.contains("active")).toBe(true);
   });
 });

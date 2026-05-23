@@ -19,6 +19,7 @@ describe("UIStore", () => {
     ui.activeModal = null;
     ui.selectedOrdinal = null;
     ui.pendingScrollOrdinal = null;
+    ui.followLatest = false;
   });
 
   describe("activeModal", () => {
@@ -112,6 +113,28 @@ describe("UIStore", () => {
       ui.scrollToOrdinal(0);
       expect(ui.selectedOrdinal).toBe(0);
       expect(ui.pendingScrollOrdinal).toBe(0);
+    });
+  });
+
+  describe("followLatest", () => {
+    it("defaults to disabled", () => {
+      expect(ui.followLatest).toBe(false);
+    });
+
+    it("can be enabled and disabled", () => {
+      ui.setFollowLatest(true);
+      expect(ui.followLatest).toBe(true);
+
+      ui.setFollowLatest(false);
+      expect(ui.followLatest).toBe(false);
+    });
+
+    it("is disabled when jumping to a specific ordinal", () => {
+      ui.setFollowLatest(true);
+      ui.scrollToOrdinal(10);
+
+      expect(ui.followLatest).toBe(false);
+      expect(ui.pendingScrollOrdinal).toBe(10);
     });
   });
 

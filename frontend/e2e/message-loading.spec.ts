@@ -85,4 +85,34 @@ test.describe("Message loading", () => {
         .toBeGreaterThan(500);
     },
   );
+
+  test("follow latest scrolls down and exits on manual wheel", async ({
+    page,
+  }) => {
+    const sp = new SessionsPage(page);
+    await sp.goto();
+    await sp.selectFirstSession();
+
+    const follow = page.getByLabel("Follow latest messages");
+    await expect(follow).toHaveAttribute("aria-pressed", "false");
+
+    await follow.click();
+
+    await expect
+      .poll(
+        () =>
+          sp.scroller.evaluate(
+            (el) =>
+              el.scrollHeight - el.clientHeight - el.scrollTop,
+          ),
+        { timeout: 2_000 },
+      )
+      .toBeLessThan(800);
+    await expect(follow).toHaveAttribute("aria-pressed", "true");
+
+    await sp.scroller.hover();
+    await page.mouse.wheel(0, -1800);
+
+    await expect(follow).toHaveAttribute("aria-pressed", "false");
+  });
 });

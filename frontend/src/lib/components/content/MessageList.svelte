@@ -22,10 +22,16 @@
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { sessionActivity } from "../../stores/sessionActivity.svelte.js";
   import SessionFindBar from "./SessionFindBar.svelte";
+  import {
+    getLatestDisplayIndex,
+    isAtLatestEdge,
+  } from "./message-scroll.js";
 
   let containerRef: HTMLDivElement | undefined = $state(undefined);
-  let scrollRaf: number | null = $state(null);
+  let scrollRaf: number | null = null;
   let lastScrollRequest = 0;
+  let followingScrollRaf: number | null = null;
+  let ignoreFollowScrollUntil = 0;
 
   let baseMessages: Message[] = $derived.by(() =>
     messages.messages.filter((m) => !isSystemMessage(m)),
@@ -194,13 +200,45 @@
       if (ui.vitalsOpen) {
         publishVisibleTimestamp();
       }
+
+      if (
+        ui.followLatest &&
+        performance.now() >= ignoreFollowScrollUntil &&
+        !isAtLatestEdge(containerRef, ui.sortNewestFirst)
+      ) {
+        ui.setFollowLatest(false);
+      }
     });
+  }
+
+  function handleManualScrollIntent() {
+    if (ui.followLatest) {
+      ui.setFollowLatest(false);
+    }
+  }
+
+  function manualScrollIntent(node: HTMLElement) {
+    node.addEventListener("wheel", handleManualScrollIntent, {
+      passive: true,
+    });
+    return {
+      destroy() {
+        node.removeEventListener(
+          "wheel",
+          handleManualScrollIntent,
+        );
+      },
+    };
   }
 
   onDestroy(() => {
     if (scrollRaf !== null) {
       cancelAnimationFrame(scrollRaf);
       scrollRaf = null;
+    }
+    if (followingScrollRaf !== null) {
+      cancelAnimationFrame(followingScrollRaf);
+      followingScrollRaf = null;
     }
   });
 
@@ -209,6 +247,7 @@
     waitFrames: number = 0,
     scrollRetries: number = 0,
     reqId: number = lastScrollRequest,
+    align: "start" | "end" = "start",
   ) {
     if (reqId !== lastScrollRequest) return;
 
@@ -225,6 +264,7 @@
       requestAnimationFrame(() => {
         scrollToDisplayIndex(
           index, waitFrames + 1, 0, reqId,
+          align,
         );
       });
       return;
@@ -237,12 +277,12 @@
     );
     if (isRendered) {
       const offsetAndAlign =
-        v.getOffsetForIndex(index, "start");
+        v.getOffsetForIndex(index, align);
       if (offsetAndAlign) {
         const [offset] = offsetAndAlign;
         v.scrollToOffset(
           Math.round(offset),
-          { align: "start" },
+          { align },
         );
       }
       return;
@@ -259,12 +299,16 @@
     // finds the item rendered (for an exact offset scroll) or
     // repeats with a more accurate estimate. Limit to 15 scroll
     // retries (~480 ms) to avoid looping forever.
-    v.scrollToIndex(index, { align: "start" });
+    v.scrollToIndex(index, { align });
     if (scrollRetries < 15) {
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           scrollToDisplayIndex(
-            index, waitFrames, scrollRetries + 1, reqId,
+            index,
+            waitFrames,
+            scrollRetries + 1,
+            reqId,
+            align,
           );
         });
       });
@@ -314,6 +358,47 @@
     void scrollToOrdinalInternal(ordinal);
   }
 
+  function scrollToLatestInternal() {
+    const reqId = ++lastScrollRequest;
+    const idx = getLatestDisplayIndex(
+      displayItemsAsc.length,
+      ui.sortNewestFirst,
+    );
+    if (idx < 0) return;
+    ignoreFollowScrollUntil = performance.now() + 1000;
+    scrollToDisplayIndex(
+      idx,
+      0,
+      0,
+      reqId,
+      ui.sortNewestFirst ? "start" : "end",
+    );
+  }
+
+  function queueFollowLatestScroll() {
+    if (followingScrollRaf !== null) {
+      cancelAnimationFrame(followingScrollRaf);
+    }
+    followingScrollRaf = requestAnimationFrame(() => {
+      followingScrollRaf = null;
+      scrollToLatestInternal();
+    });
+  }
+
+  $effect(() => {
+    const follow = ui.followLatest;
+    const count = displayItemsAsc.length;
+    const newestFirst = ui.sortNewestFirst;
+    const sessionId = messages.sessionId;
+    if (!follow || count === 0 || !sessionId) return;
+    void newestFirst;
+    queueFollowLatestScroll();
+  });
+
+  export function scrollToLatest() {
+    scrollToLatestInternal();
+  }
+
   export function getDisplayItems(): DisplayItem[] {
     return displayItemsAsc;
   }
@@ -351,6 +436,7 @@
     data-messages-session-id={messages.sessionId}
     data-loaded={!messages.loading}
     onscroll={handleScroll}
+    use:manualScrollIntent
   >
     <div
       style="height: {virtualizer.instance?.getTotalSize() ?? 0}px; width: 100%; position: relative;"
