@@ -272,14 +272,13 @@ class SessionsStore {
     saveFilters(this.filters);
     this.startLiveRefresh();
     const version = ++this.loadVersion;
-    // Only flip loading=true when we don't already have data to show.
-    // Live-event refetches and filter-change refetches keep the
-    // existing list visible and swap it in place when data arrives,
-    // instead of flashing to a loading indicator.
-    if (this.sessions.length === 0) this.loading = true;
-    // Preserve old data during reload — clearing eagerly
-    // causes a flash because the sidebar and content area
-    // briefly see an empty session list.
+    // Keep the existing list visible during reloads, but mark
+    // loading=true so large filter expansions expose that more
+    // pages are still being fetched after page 1 is published.
+    this.loading = true;
+    // Preserve old data during reload — clearing eagerly causes
+    // a flash because the sidebar and content area briefly see
+    // an empty session list.
     const prev = {
       sessions: this.sessions,
       nextCursor: this.nextCursor,
@@ -288,6 +287,7 @@ class SessionsStore {
     try {
       let cursor: string | undefined = undefined;
       let loaded: Session[] = [];
+      let publishedFirstPage = false;
 
       for (;;) {
         if (this.loadVersion !== version) return;
@@ -301,12 +301,22 @@ class SessionsStore {
         if (page.sessions.length === 0) break;
         loaded = [...loaded, ...page.sessions];
         cursor = page.next_cursor ?? undefined;
+        if (!publishedFirstPage) {
+          // Publish page 1 as soon as it arrives so filter changes
+          // with very large result sets don't leave stale sidebar
+          // rows visible while the remaining pages stream in.
+          this.sessions = loaded;
+          this.nextCursor = cursor ?? null;
+          this.total = loaded.length;
+          publishedFirstPage = true;
+        }
         if (!cursor) break;
       }
 
       // Swap atomically once all pages have loaded. Updating
-      // this.sessions and this.total after each page causes the
-      // sidebar session count to visibly tick up as pages arrive.
+      // this.sessions and this.total after the first page avoids
+      // stale top rows for large result sets without making the
+      // sidebar session count visibly tick up on every page.
       this.sessions = loaded;
       this.nextCursor = null;
       this.total = loaded.length;

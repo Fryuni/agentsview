@@ -493,11 +493,12 @@ describe("SessionsStore", () => {
       expect(sessions.nextCursor).toBeNull();
     });
 
-    it("swaps sessions atomically after all pages load", async () => {
+    it("publishes the first refreshed page while later pages load", async () => {
       // Pre-populate with a list representing a prior load,
-      // then trigger a multi-page reload. The visible count
-      // must not tick up as pages arrive — old data stays,
-      // then the new data replaces it in one step.
+      // then trigger a multi-page reload. The first page should
+      // replace stale results immediately so expanding filters,
+      // such as Include automated sessions, shows recent matches
+      // without waiting for every page to finish.
       sessions.sessions = [
         makeSession({ id: "old-a" }),
         makeSession({ id: "old-b" }),
@@ -532,13 +533,10 @@ describe("SessionsStore", () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      // Old sessions are still visible while pagination is in flight.
-      expect(sessions.sessions.map((s) => s.id)).toEqual([
-        "old-a",
-        "old-b",
-        "old-c",
-      ]);
-      expect(sessions.total).toBe(3);
+      // The first refreshed page is visible while pagination is in flight.
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["new-1"]);
+      expect(sessions.total).toBe(1);
+      expect(sessions.loading).toBe(true);
 
       resolvePage2!({
         sessions: [makeSession({ id: "new-2" })],
