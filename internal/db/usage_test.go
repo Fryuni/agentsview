@@ -2499,6 +2499,44 @@ func TestGetSessionUsage_ExplicitCostOnly(t *testing.T) {
 	if math.Abs(u.CostUSD-0.02) > 1e-9 {
 		t.Errorf("CostUSD = %v, want 0.02", u.CostUSD)
 	}
+	if len(u.Models) != 1 || u.Models[0] != "gpt-5.4" {
+		t.Errorf("Models = %v, want [gpt-5.4]", u.Models)
+	}
+}
+
+func TestGetSessionUsage_DedupesDuplicateClaudeRows(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedOpusPricing(t, d)
+	insertSession(t, d, "claude:s6", "proj", func(s *Session) {
+		s.Agent = "claude-code"
+		s.StartedAt = new("2026-05-20T10:00:00Z")
+	})
+	// Two rows sharing the same claude message+request id (a
+	// fork/replay) must be counted once, not doubled.
+	insertMessages(t, d,
+		Message{
+			SessionID: "claude:s6", Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-05-20T10:30:00Z", Model: "claude-opus-4-6",
+			ClaudeMessageID: "msg-1", ClaudeRequestID: "req-1",
+			TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
+		},
+		Message{
+			SessionID: "claude:s6", Ordinal: 1, Role: "assistant",
+			Timestamp: "2026-05-20T10:31:00Z", Model: "claude-opus-4-6",
+			ClaudeMessageID: "msg-1", ClaudeRequestID: "req-1",
+			TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
+		},
+	)
+	u, err := d.GetSessionUsage(ctx, "claude:s6")
+	requireNoError(t, err, "GetSessionUsage")
+	// One row priced at 1000*5/1e6 + 500*25/1e6 = 0.0175; deduped, not 0.035.
+	if math.Abs(u.CostUSD-0.0175) > 1e-9 {
+		t.Errorf("CostUSD = %v, want 0.0175 (deduped)", u.CostUSD)
+	}
+	if !u.HasCost {
+		t.Error("HasCost = false, want true")
+	}
 }
 
 func TestGetSessionUsage_NoTokenRowsKeepsMetadata(t *testing.T) {
