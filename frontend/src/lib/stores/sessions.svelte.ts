@@ -1,17 +1,41 @@
 import * as api from "../api/client.js";
-import type { Session, ProjectInfo, AgentInfo } from "../api/types.js";
+import type {
+  Session,
+  ProjectInfo,
+  AgentInfo,
+  SidebarSessionIndexRow,
+} from "../api/types.js";
 import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
 
 const SESSION_PAGE_SIZE = 500;
 
+export interface SessionGroupInput {
+  id: string;
+  parent_session_id?: string | null;
+  relationship_type?: string | null;
+  project: string;
+  machine: string;
+  agent: string;
+  first_message?: string | null;
+  display_name?: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  created_at?: string;
+  termination_status?: string | null;
+  message_count: number;
+  user_message_count?: number;
+  is_automated?: boolean;
+  is_teammate?: boolean;
+}
+
 export interface SessionGroup {
   key: string;
   project: string;
-  sessions: Session[];
+  sessions: SessionGroupInput[];
   /** Unfiltered session list for ancestry classification.
    *  Set when a filter (e.g. starred) removes sessions from the group. */
-  allSessions?: Session[];
+  allSessions?: SessionGroupInput[];
   primarySessionId: string;
   totalMessages: number;
   firstMessage: string | null;
@@ -246,7 +270,6 @@ class SessionsStore {
         f.minUserMessages > 0 ? f.minUserMessages : undefined,
       include_one_shot: f.includeOneShot || undefined,
       include_automated: f.includeAutomated || undefined,
-      include_children: true,
     };
   }
 
@@ -272,6 +295,8 @@ class SessionsStore {
     saveFilters(this.filters);
     this.startLiveRefresh();
     const version = ++this.loadVersion;
+    const indexVersion = ++this.sidebarIndexVersion;
+    this.hydratedSessionsByVersion.set(indexVersion, new Map());
     // Keep the existing list visible during reloads, but mark
     // loading=true so large filter expansions expose that more
     // pages are still being fetched after page 1 is published.
@@ -285,41 +310,12 @@ class SessionsStore {
       total: this.total,
     };
     try {
-      let cursor: string | undefined = undefined;
-      let loaded: Session[] = [];
-      let publishedFirstPage = false;
+      const index = await api.getSidebarSessionIndex(this.apiParams);
+      if (this.loadVersion !== version) return;
 
-      for (;;) {
-        if (this.loadVersion !== version) return;
-        const page = await api.listSessions({
-          ...this.apiParams,
-          cursor,
-          limit: SESSION_PAGE_SIZE,
-        });
-        if (this.loadVersion !== version) return;
-
-        if (page.sessions.length === 0) break;
-        loaded = [...loaded, ...page.sessions];
-        cursor = page.next_cursor ?? undefined;
-        if (!publishedFirstPage) {
-          // Publish page 1 as soon as it arrives so filter changes
-          // with very large result sets don't leave stale sidebar
-          // rows visible while the remaining pages stream in.
-          this.sessions = loaded;
-          this.nextCursor = cursor ?? null;
-          this.total = loaded.length;
-          publishedFirstPage = true;
-        }
-        if (!cursor) break;
-      }
-
-      // Swap atomically once all pages have loaded. Updating
-      // this.sessions and this.total after the first page avoids
-      // stale top rows for large result sets without making the
-      // sidebar session count visibly tick up on every page.
-      this.sessions = loaded;
+      this.sessions = index.sessions.map(sidebarIndexRowToSession);
       this.nextCursor = null;
-      this.total = loaded.length;
+      this.total = index.total;
     } catch {
       // Restore previous state so a transient failure
       // doesn't wipe the visible session list.
@@ -333,6 +329,44 @@ class SessionsStore {
         this.loading = false;
       }
     }
+  }
+
+  sidebarIndexVersion: number = $state(0);
+  hydratedSessionsByVersion: Map<number, Map<string, Session>> =
+    $state(new Map());
+
+  async hydrateVisibleSessions(
+    ids: string[],
+    version: number = this.sidebarIndexVersion,
+  ) {
+    const uniqueIds = [...new Set(ids)];
+    const cache =
+      this.hydratedSessionsByVersion.get(version) ?? new Map<string, Session>();
+    this.hydratedSessionsByVersion.set(version, cache);
+
+    await Promise.all(uniqueIds.map(async (id) => {
+      if (cache.has(id)) return;
+      try {
+        const hydrated = await api.getSession(id);
+        if (version !== this.sidebarIndexVersion) return;
+        cache.set(id, hydrated);
+        this.mergeHydratedSession(hydrated);
+      } catch {
+        // Visible hydration is best-effort; the skinny row remains usable.
+      }
+    }));
+  }
+
+  private mergeHydratedSession(hydrated: Session) {
+    const idx = this.sessions.findIndex((s) => s.id === hydrated.id);
+    if (idx < 0) return;
+    const current = this.sessions[idx]!;
+    this.sessions[idx] = {
+      ...current,
+      ...hydrated,
+      display_name: hydrated.display_name ?? current.display_name,
+      is_teammate: hydrated.is_teammate ?? current.is_teammate,
+    };
   }
 
   async loadMore() {
@@ -881,6 +915,31 @@ export function createSessionsStore(): SessionsStore {
   return new SessionsStore();
 }
 
+function sidebarIndexRowToSession(row: SidebarSessionIndexRow): Session {
+  return {
+    id: row.id,
+    project: row.project,
+    machine: row.machine,
+    agent: row.agent,
+    first_message: null,
+    display_name: row.display_name ?? null,
+    started_at: row.started_at,
+    ended_at: row.ended_at,
+    message_count: row.message_count,
+    user_message_count: row.user_message_count,
+    parent_session_id: row.parent_session_id ?? undefined,
+    relationship_type: row.relationship_type ?? undefined,
+    termination_status: row.termination_status ?? null,
+    total_output_tokens: 0,
+    peak_context_tokens: 0,
+    has_total_output_tokens: false,
+    has_peak_context_tokens: false,
+    is_automated: row.is_automated,
+    is_teammate: row.is_teammate ?? false,
+    created_at: row.created_at,
+  };
+}
+
 function maxString(a: string | null, b: string | null): string | null {
   if (a == null) return b;
   if (b == null) return a;
@@ -1006,7 +1065,7 @@ export function getSessionStatus(
  */
 function findRoot(
   id: string,
-  byId: Map<string, Session>,
+  byId: Map<string, SessionGroupInput>,
   rootCache: Map<string, string>,
 ): string {
   const cached = rootCache.get(id);
@@ -1032,8 +1091,10 @@ function findRoot(
   return cur;
 }
 
-export function buildSessionGroups(sessions: Session[]): SessionGroup[] {
-  const byId = new Map<string, Session>();
+export function buildSessionGroups(
+  sessions: SessionGroupInput[],
+): SessionGroup[] {
+  const byId = new Map<string, SessionGroupInput>();
   for (const s of sessions) {
     byId.set(s.id, s);
   }
@@ -1075,8 +1136,8 @@ export function buildSessionGroups(sessions: Session[]): SessionGroup[] {
   // A session with <teammate-message in first_message is always a child;
   // if parent_session_id is missing, adopt it into the nearest non-teammate
   // root group in the same project (no time limit).
-  const isTeammateSession = (s: Session) =>
-    s.first_message?.includes("<teammate-message") ?? false;
+  const isTeammateSession = (s: SessionGroupInput) =>
+    s.is_teammate ?? s.first_message?.includes("<teammate-message") ?? false;
 
   const keysToRemove = new Set<string>();
 
