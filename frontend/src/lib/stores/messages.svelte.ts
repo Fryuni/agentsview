@@ -464,6 +464,7 @@ class MessagesStore {
         )
         .map((m) => [m.ordinal, m]),
     );
+    clearContentCaches();
     this.messages = this.messages.map(
       (m) => updates.get(m.ordinal) ?? m,
     );

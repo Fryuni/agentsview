@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { messages } from './messages.svelte.js';
 import * as api from '../api/client.js';
+import { parseContent } from '../utils/content-parser.js';
 import type {
   Message,
   MessagesResponse,
@@ -425,6 +426,53 @@ describe('MessagesStore', () => {
         signal: expect.any(AbortSignal),
       }),
     );
+  });
+
+  it('should clear parser caches for same-length rewritten messages on same-count reload', async () => {
+    const original = {
+      ...makeMessage(0),
+      content: 'alpha1',
+      content_length: 6,
+    };
+    vi.mocked(api.getSession).mockResolvedValue(
+      makeSession('s1', 1),
+    );
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([original]),
+    );
+
+    await messages.loadSession('s1');
+    expect(
+      parseContent(
+        original.content,
+        original.has_tool_use,
+        original.id,
+        original.content_length,
+      ),
+    ).toEqual([{ type: 'text', content: 'alpha1' }]);
+
+    const rewritten = {
+      ...original,
+      content: 'bravo2',
+    };
+    vi.mocked(api.getSession).mockResolvedValueOnce(
+      makeSession('s1', 1),
+    );
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([rewritten]),
+    );
+
+    await messages.reload();
+
+    expect(messages.messages[0]!.content).toBe('bravo2');
+    expect(
+      parseContent(
+        messages.messages[0]!.content,
+        messages.messages[0]!.has_tool_use,
+        messages.messages[0]!.id,
+        messages.messages[0]!.content_length,
+      ),
+    ).toEqual([{ type: 'text', content: 'bravo2' }]);
   });
 
   it('should not update messageCount prematurely if incremental fetch fails and triggers full reload', async () => {

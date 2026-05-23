@@ -177,6 +177,22 @@ test.describe("Message loading", () => {
     }
   });
 
+  test("follow latest exits on global keyboard message navigation", async ({
+    page,
+  }) => {
+    const sp = new SessionsPage(page);
+    await sp.goto();
+    await sp.selectFirstSession();
+
+    const follow = page.getByLabel("Follow latest messages");
+    await follow.click();
+    await expect(follow).toHaveAttribute("aria-pressed", "true");
+
+    await page.keyboard.press("ArrowUp");
+
+    await expect(follow).toHaveAttribute("aria-pressed", "false");
+  });
+
   test("follow latest settles after a tall final message is measured", async ({
     page,
   }) => {

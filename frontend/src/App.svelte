@@ -195,8 +195,7 @@
     const selected = ui.selectedOrdinal;
     if (selected === null) {
       const first = sorted[0]!;
-      ui.selectOrdinal(first.ordinals[0]!);
-      messageListRef?.scrollToOrdinal(first.ordinals[0]!);
+      navigateToMessageOrdinal(first.ordinals[0]!);
       return;
     }
 
@@ -210,8 +209,15 @@
     if (nextIdx === curIdx) return;
 
     const next = sorted[nextIdx]!;
-    ui.selectOrdinal(next.ordinals[0]!);
-    messageListRef?.scrollToOrdinal(next.ordinals[0]!);
+    navigateToMessageOrdinal(next.ordinals[0]!);
+  }
+
+  function navigateToMessageOrdinal(ordinal: number) {
+    if (ui.followLatest) {
+      ui.setFollowLatest(false);
+    }
+    ui.selectOrdinal(ordinal);
+    messageListRef?.scrollToOrdinal(ordinal);
   }
 
   /** True when URL params contain session filter keys (deep-link). */
