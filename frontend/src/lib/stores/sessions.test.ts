@@ -300,6 +300,14 @@ describe("SessionsStore", () => {
       expect(sessions.sessions[0]!.first_message).toBeNull();
     });
 
+    it("marks skinny sidebar rows as index-only until hydrated", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "skinny" })]);
+
+      await sessions.load();
+
+      expect(sessions.sessions[0]!.is_index_only).toBe(true);
+    });
+
     it("merges hydrated full rows without changing index order", async () => {
       mockSidebarIndex([
         makeSkinnyRow({ id: "second" }),
@@ -317,6 +325,7 @@ describe("SessionsStore", () => {
         "first",
       ]);
       expect(sessions.sessions[1]!.first_message).toBe("full detail");
+      expect(sessions.sessions[1]!.is_index_only).toBe(false);
     });
 
     it("drops stale-version hydration results", async () => {
@@ -345,6 +354,129 @@ describe("SessionsStore", () => {
 
       expect(sessions.sessions.map((s) => s.id)).toEqual(["fresh"]);
       expect(sessions.sessions[0]!.first_message).toBeNull();
+    });
+
+    it("dedupes overlapping visible hydration for the same session", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "same" })]);
+      await sessions.load();
+
+      let resolveDetail!: (session: Session) => void;
+      vi.mocked(api.getSession).mockReturnValue(
+        new Promise<Session>((resolve) => {
+          resolveDetail = resolve;
+        }),
+      );
+
+      const first = (sessions as any).hydrateVisibleSessions(["same"]);
+      const second = (sessions as any).hydrateVisibleSessions(["same"]);
+      await Promise.resolve();
+
+      expect(api.getSession).toHaveBeenCalledTimes(1);
+
+      resolveDetail(makeSession({ id: "same", first_message: "detail" }));
+      await Promise.all([first, second]);
+
+      expect(sessions.sessions[0]!.first_message).toBe("detail");
+    });
+
+    it("bounds visible hydration concurrency", async () => {
+      const rows = Array.from({ length: 10 }, (_, i) =>
+        makeSkinnyRow({ id: `s${i}` })
+      );
+      mockSidebarIndex(rows);
+      await sessions.load();
+
+      const resolvers: Array<() => void> = [];
+      let inFlight = 0;
+      let maxInFlight = 0;
+      vi.mocked(api.getSession).mockImplementation((id: string) => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        return new Promise<Session>((resolve) => {
+          resolvers.push(() => {
+            inFlight--;
+            resolve(makeSession({ id }));
+          });
+        });
+      });
+
+      const hydrate = (sessions as any).hydrateVisibleSessions(
+        rows.map((row) => row.id),
+      );
+
+      await vi.waitFor(() => {
+        expect(resolvers.length).toBeGreaterThan(0);
+      });
+      expect(maxInFlight).toBeLessThanOrEqual(6);
+
+      while (resolvers.length > 0) {
+        resolvers.shift()!();
+        await Promise.resolve();
+      }
+      await hydrate;
+      expect(api.getSession).toHaveBeenCalledTimes(10);
+    });
+
+    it("refreshing the active session preserves teammate metadata", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "team", is_teammate: true }),
+      ]);
+      await sessions.load();
+      sessions.selectSession("team");
+      vi.mocked(api.getSession).mockResolvedValue(
+        makeSession({ id: "team", first_message: "full detail" }),
+      );
+
+      await sessions.refreshActiveSession();
+
+      expect(sessions.sessions[0]!.first_message).toBe("full detail");
+      expect(sessions.sessions[0]!.is_teammate).toBe(true);
+      expect(sessions.sessions[0]!.is_index_only).toBe(false);
+    });
+
+    it("selecting an index-only session hydrates it", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "select-me" })]);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValue(
+        makeSession({
+          id: "select-me",
+          first_message: "hydrated on select",
+        }),
+      );
+
+      sessions.selectSession("select-me");
+
+      await vi.waitFor(() => {
+        expect(sessions.sessions[0]!.first_message).toBe(
+          "hydrated on select",
+        );
+      });
+      expect(sessions.sessions[0]!.is_index_only).toBe(false);
+    });
+
+    it("does not expose index-only rows through activeSession", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "active" })]);
+      await sessions.load();
+      let resolveDetail!: (session: Session) => void;
+      vi.mocked(api.getSession).mockReturnValue(
+        new Promise<Session>((resolve) => {
+          resolveDetail = resolve;
+        }),
+      );
+
+      sessions.selectSession("active");
+
+      expect(sessions.activeSession).toBeUndefined();
+
+      resolveDetail(makeSession({
+        id: "active",
+        first_message: "ready for detail consumers",
+      }));
+      await vi.waitFor(() => {
+        expect(sessions.activeSession?.first_message).toBe(
+          "ready for detail consumers",
+        );
+      });
     });
 
     it("delete removes an index row locally and invalidates metadata", async () => {
@@ -1392,6 +1524,31 @@ describe("SessionsStore", () => {
 
       expect(sessions.activeSessionId).toBe("existing");
       expect(api.getSession).not.toHaveBeenCalled();
+    });
+
+    it("hydrates an already-loaded index-only session", async () => {
+      sessions.sessions = [
+        makeSession({
+          id: "existing",
+          first_message: null,
+          is_index_only: true,
+        }),
+      ];
+      vi.mocked(api.getSession).mockResolvedValue(
+        makeSession({
+          id: "existing",
+          first_message: "hydrated navigation",
+        }),
+      );
+
+      await sessions.navigateToSession("existing");
+
+      expect(api.getSession).toHaveBeenCalledWith("existing");
+      expect(sessions.activeSessionId).toBe("existing");
+      expect(sessions.sessions[0]!.first_message).toBe(
+        "hydrated navigation",
+      );
+      expect(sessions.sessions[0]!.is_index_only).toBe(false);
     });
   });
 });

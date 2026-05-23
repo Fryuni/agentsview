@@ -9,6 +9,7 @@ import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
 
 const SESSION_PAGE_SIZE = 500;
+const SIDEBAR_HYDRATION_CONCURRENCY = 6;
 
 export interface SessionGroupInput {
   id: string;
@@ -228,13 +229,20 @@ class SessionsStore {
   private machinesLoaded: boolean = false;
   private machinesPromise: Promise<void> | null = null;
   private machinesVersion: number = 0;
+  private sidebarHydrationInflightByVersion = new Map<
+    number,
+    Map<string, Promise<void>>
+  >();
+  private sidebarHydrationQueue: Array<() => void> = [];
+  private sidebarHydrationActive = 0;
 
   private liveRefreshStarted = false;
   private unsubEvents: (() => void) | null = null;
   private safetyNetTimer: ReturnType<typeof setInterval> | null = null;
 
   get activeSession(): Session | undefined {
-    return this.sessions.find((s) => s.id === this.activeSessionId);
+    const session = this.sessions.find((s) => s.id === this.activeSessionId);
+    return session?.is_index_only ? undefined : session;
   }
 
   get groupedSessions(): SessionGroup[] {
@@ -343,18 +351,46 @@ class SessionsStore {
     const cache =
       this.hydratedSessionsByVersion.get(version) ?? new Map<string, Session>();
     this.hydratedSessionsByVersion.set(version, cache);
+    const inflight = this.sidebarHydrationInflightByVersion.get(version) ??
+      new Map<string, Promise<void>>();
+    this.sidebarHydrationInflightByVersion.set(version, inflight);
 
-    await Promise.all(uniqueIds.map(async (id) => {
+    await Promise.all(uniqueIds.map((id) => {
       if (cache.has(id)) return;
-      try {
-        const hydrated = await api.getSession(id);
-        if (version !== this.sidebarIndexVersion) return;
-        cache.set(id, hydrated);
-        this.mergeHydratedSession(hydrated);
-      } catch {
-        // Visible hydration is best-effort; the skinny row remains usable.
-      }
+      const existing = inflight.get(id);
+      if (existing) return existing;
+
+      const promise = this.runSidebarHydration(async () => {
+        try {
+          const hydrated = await api.getSession(id);
+          if (version !== this.sidebarIndexVersion) return;
+          cache.set(id, hydrated);
+          this.mergeHydratedSession(hydrated);
+        } catch {
+          // Visible hydration is best-effort; the skinny row remains usable.
+        } finally {
+          inflight.delete(id);
+        }
+      });
+      inflight.set(id, promise);
+      return promise;
     }));
+  }
+
+  private async runSidebarHydration(task: () => Promise<void>): Promise<void> {
+    if (this.sidebarHydrationActive >= SIDEBAR_HYDRATION_CONCURRENCY) {
+      await new Promise<void>((resolve) => {
+        this.sidebarHydrationQueue.push(resolve);
+      });
+    }
+
+    this.sidebarHydrationActive++;
+    try {
+      await task();
+    } finally {
+      this.sidebarHydrationActive--;
+      this.sidebarHydrationQueue.shift()?.();
+    }
   }
 
   private mergeHydratedSession(hydrated: Session) {
@@ -366,6 +402,7 @@ class SessionsStore {
       ...hydrated,
       display_name: hydrated.display_name ?? current.display_name,
       is_teammate: hydrated.is_teammate ?? current.is_teammate,
+      is_index_only: false,
     };
   }
 
@@ -489,6 +526,7 @@ class SessionsStore {
 
   selectSession(id: string) {
     this.setActiveSession(id);
+    void this.hydrateSelectedIndexOnlySession(id);
   }
 
   /**
@@ -498,16 +536,24 @@ class SessionsStore {
   async navigateToSession(id: string) {
     this.setActiveSession(id);
     const existing = this.sessions.find((s) => s.id === id);
-    if (!existing) {
-      try {
-        const session = await api.getSession(id);
-        if (this.activeSessionId === id) {
-          this.sessions = [...this.sessions, session];
-        }
-      } catch {
-        // Session not found — selection stands without metadata
-      }
+    if (existing) {
+      await this.hydrateSelectedIndexOnlySession(id);
+      return;
     }
+    try {
+      const session = await api.getSession(id);
+      if (this.activeSessionId === id) {
+        this.sessions = [...this.sessions, session];
+      }
+    } catch {
+      // Session not found — selection stands without metadata
+    }
+  }
+
+  private async hydrateSelectedIndexOnlySession(id: string) {
+    const existing = this.sessions.find((s) => s.id === id);
+    if (!existing?.is_index_only) return;
+    await this.hydrateVisibleSessions([id]);
   }
 
   deselectSession() {
@@ -529,7 +575,7 @@ class SessionsStore {
       }
       const idx = this.sessions.findIndex((s) => s.id === id);
       if (idx >= 0) {
-        this.sessions[idx] = session;
+        this.mergeHydratedSession(session);
       }
     } catch {
       // Session may have been deleted
@@ -936,6 +982,7 @@ function sidebarIndexRowToSession(row: SidebarSessionIndexRow): Session {
     has_peak_context_tokens: false,
     is_automated: row.is_automated,
     is_teammate: row.is_teammate ?? false,
+    is_index_only: true,
     created_at: row.created_at,
   };
 }

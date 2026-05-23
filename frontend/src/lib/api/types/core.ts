@@ -31,6 +31,8 @@ export interface Session {
   has_peak_context_tokens?: boolean;
   is_automated: boolean;
   is_teammate?: boolean;
+  /** True when populated from the skinny sidebar index and not yet hydrated. */
+  is_index_only?: boolean;
   // Session signals (from backend computation)
   health_score?: number | null;
   health_grade?: string | null;
