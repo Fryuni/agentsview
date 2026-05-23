@@ -32,6 +32,9 @@
   let scrollRaf: number | null = null;
   let lastScrollRequest = 0;
   let followingScrollRaf: number | null = null;
+  let followSettleTimer:
+    | ReturnType<typeof setTimeout>
+    | null = null;
 
   let baseMessages: Message[] = $derived.by(() =>
     messages.messages.filter((m) => !isSystemMessage(m)),
@@ -233,6 +236,10 @@
       cancelAnimationFrame(followingScrollRaf);
       followingScrollRaf = null;
     }
+    if (followSettleTimer !== null) {
+      clearTimeout(followSettleTimer);
+      followSettleTimer = null;
+    }
   });
 
   function scrollToDisplayIndex(
@@ -365,6 +372,37 @@
       reqId,
       ui.sortNewestFirst ? "start" : "end",
     );
+    startFollowLatestSettle(reqId);
+  }
+
+  function forceLatestEdge() {
+    if (!containerRef) return;
+    containerRef.scrollTop = ui.sortNewestFirst
+      ? 0
+      : containerRef.scrollHeight;
+  }
+
+  function startFollowLatestSettle(reqId: number) {
+    if (followSettleTimer !== null) {
+      clearTimeout(followSettleTimer);
+      followSettleTimer = null;
+    }
+
+    const tick = () => {
+      followSettleTimer = null;
+      if (
+        reqId !== lastScrollRequest ||
+        !ui.followLatest ||
+        !containerRef
+      ) {
+        return;
+      }
+
+      forceLatestEdge();
+      followSettleTimer = setTimeout(tick, 100);
+    };
+
+    tick();
   }
 
   function queueFollowLatestScroll() {

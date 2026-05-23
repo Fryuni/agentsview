@@ -200,6 +200,86 @@ test.describe("Message loading", () => {
       .toBeLessThanOrEqual(8);
   });
 
+  test("follow latest remains pinned when final content grows after load", async ({
+    page,
+  }) => {
+    await page.route("**/slow-follow-image.svg", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      await route.fulfill({
+        contentType: "image/svg+xml",
+        body: `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="2400">
+          <rect width="800" height="2400" fill="#dbeafe"/>
+          <text x="40" y="120" font-size="48">slow final content</text>
+        </svg>`,
+      });
+    });
+
+    await page.route(
+      "**/api/v1/sessions/test-session-xlarge-5500/messages*",
+      async (route) => {
+        const now = new Date().toISOString();
+        const messages = Array.from(
+          { length: 1000 },
+          (_, i) => {
+            const ordinal = 4500 + i;
+            const isLast = ordinal === 5499;
+            const content = isLast
+              ? "Final response before image.\n\n![slow final content](/slow-follow-image.svg)"
+              : `Message ${ordinal}`;
+            return {
+              id: ordinal,
+              session_id: "test-session-xlarge-5500",
+              ordinal,
+              role: ordinal % 2 === 0 ? "user" : "assistant",
+              content,
+              timestamp: now,
+              has_thinking: false,
+              thinking_text: "",
+              has_tool_use: false,
+              content_length: content.length,
+              model: "",
+              token_usage: null,
+              context_tokens: 0,
+              output_tokens: 0,
+              has_context_tokens: false,
+              has_output_tokens: false,
+              tool_calls: [],
+              is_system: false,
+            };
+          },
+        );
+
+        await route.fulfill({
+          json: {
+            messages: [...messages].reverse(),
+            count: messages.length,
+          },
+        });
+      },
+    );
+
+    const sp = new SessionsPage(page);
+    await sp.goto();
+    await sp.selectFirstSession();
+
+    await page.getByLabel("Follow latest messages").click();
+    await page.locator(".message-list-scroll img").waitFor({
+      state: "visible",
+      timeout: 3_000,
+    });
+
+    await expect
+      .poll(
+        () =>
+          sp.scroller.evaluate(
+            (el) =>
+              el.scrollHeight - el.clientHeight - el.scrollTop,
+          ),
+        { timeout: 3_000 },
+      )
+      .toBeLessThanOrEqual(8);
+  });
+
   test("follow latest stays enabled through non-user scroll drift", async ({
     page,
   }) => {
