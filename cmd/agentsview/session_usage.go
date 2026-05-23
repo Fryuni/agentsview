@@ -58,7 +58,7 @@ func runSessionUsage(sessionID, format string) {
 // figure as a model-pricing estimate.
 func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 	label := func(name string) string {
-		return fmt.Sprintf("%-12s", name+":")
+		return fmt.Sprintf("%-14s", name+":")
 	}
 	fmt.Fprintf(w, "%s %s\n", label("Session"),
 		sanitizeTerminal(out.SessionID))

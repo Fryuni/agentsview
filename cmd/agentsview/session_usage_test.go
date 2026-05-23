@@ -29,6 +29,26 @@ func TestRenderSessionUsageHuman_WithCost(t *testing.T) {
 	}
 }
 
+func TestRenderSessionUsageHuman_NoCostNoModels(t *testing.T) {
+	out := &sessionUsageOutput{
+		SessionUsage: db.SessionUsage{
+			SessionID: "claude:s3", Agent: "claude-code",
+			HasTokenData: true, HasCost: false,
+		},
+	}
+	var b strings.Builder
+	if err := renderSessionUsageHuman(&b, out); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	s := b.String()
+	if !strings.Contains(s, "n/a") {
+		t.Errorf("expected bare 'n/a' cost line:\n%s", s)
+	}
+	if strings.Contains(s, "unpriced") {
+		t.Errorf("should not mention unpriced when none:\n%s", s)
+	}
+}
+
 func TestRenderSessionUsageHuman_NoCost(t *testing.T) {
 	out := &sessionUsageOutput{
 		SessionUsage: db.SessionUsage{
