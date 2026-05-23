@@ -243,7 +243,7 @@ def _build_metadata(version: str, readme: str | None) -> str:
         f"Version: {version}",
         "Summary: Local web viewer for AI agent sessions",
         "Home-page: https://github.com/kenn-io/agentsview",
-        "Author: Wes McKinney",
+        "Author: Kenn Software LLC",
         "License: MIT",
         "Requires-Python: >=3.9",
         "Classifier: License :: OSI Approved :: MIT License",

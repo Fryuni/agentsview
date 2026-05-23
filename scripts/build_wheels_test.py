@@ -240,7 +240,7 @@ class TestBuildWheel:
         assert "Version: 0.15.0" in metadata
         assert "Requires-Python: >=3.9" in metadata
         assert "License: MIT" in metadata
-        assert "Author: Wes McKinney" in metadata
+        assert "Author: Kenn Software LLC" in metadata
 
     def test_wheel_file_has_root_is_purelib_false(self, tmp_path: Path) -> None:
         whl = build_wheel(b"fake", tmp_path, "0.15.0", "linux_amd64")
