@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  getAlignedOffsetScrollAlign,
   getLatestDisplayIndex,
   isAtLatestEdge,
 } from "./message-scroll.js";
@@ -41,5 +42,10 @@ describe("message scroll helpers", () => {
         true,
       ),
     ).toBe(false);
+  });
+
+  it("uses direct offset semantics for already-aligned offsets", () => {
+    expect(getAlignedOffsetScrollAlign("start")).toBe("start");
+    expect(getAlignedOffsetScrollAlign("end")).toBe("start");
   });
 });

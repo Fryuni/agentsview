@@ -96,6 +96,21 @@ test.describe("Message loading", () => {
     const follow = page.getByLabel("Follow latest messages");
     await expect(follow).toHaveAttribute("aria-pressed", "false");
 
+    await sp.scroller.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+      el.dispatchEvent(new Event("scroll"));
+    });
+    await expect
+      .poll(
+        () =>
+          sp.scroller.evaluate(
+            (el) =>
+              el.scrollHeight - el.clientHeight - el.scrollTop,
+          ),
+        { timeout: 2_000 },
+      )
+      .toBeLessThanOrEqual(8);
+
     await follow.click();
 
     await expect
@@ -107,7 +122,7 @@ test.describe("Message loading", () => {
           ),
         { timeout: 2_000 },
       )
-      .toBeLessThan(800);
+      .toBeLessThanOrEqual(8);
     await expect(follow).toHaveAttribute("aria-pressed", "true");
 
     await sp.scroller.hover();

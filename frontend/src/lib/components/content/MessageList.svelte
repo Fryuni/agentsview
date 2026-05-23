@@ -23,8 +23,10 @@
   import { sessionActivity } from "../../stores/sessionActivity.svelte.js";
   import SessionFindBar from "./SessionFindBar.svelte";
   import {
+    getAlignedOffsetScrollAlign,
     getLatestDisplayIndex,
     isAtLatestEdge,
+    type ScrollAlign,
   } from "./message-scroll.js";
 
   let containerRef: HTMLDivElement | undefined = $state(undefined);
@@ -247,7 +249,7 @@
     waitFrames: number = 0,
     scrollRetries: number = 0,
     reqId: number = lastScrollRequest,
-    align: "start" | "end" = "start",
+    align: ScrollAlign = "start",
   ) {
     if (reqId !== lastScrollRequest) return;
 
@@ -282,7 +284,7 @@
         const [offset] = offsetAndAlign;
         v.scrollToOffset(
           Math.round(offset),
-          { align },
+          { align: getAlignedOffsetScrollAlign(align) },
         );
       }
       return;
