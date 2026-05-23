@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -18,6 +19,20 @@ func newSessionUsageCommand() *cobra.Command {
 		Short:        "Show token usage and cost estimate for a session",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
+		// usage uses the direct token-use path (local SQLite +
+		// on-demand sync), not the SessionService layer, so it cannot
+		// honor --server. Reject it here with the same "--server not
+		// yet implemented" error the service-backed session commands
+		// return via resolveService, rather than silently querying
+		// local data for a daemon-targeted request. PreRunE surfaces
+		// the error through Execute (exit 1); Run keeps os.Exit for
+		// the 0/2/3 usage codes.
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if remote, _ := cmd.Flags().GetString("server"); remote != "" {
+				return errors.New("--server not yet implemented")
+			}
+			return nil
+		},
 		Run: func(cmd *cobra.Command, args []string) {
 			runSessionUsage(args[0], outputFormat(cmd))
 		},
