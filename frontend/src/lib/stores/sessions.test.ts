@@ -2064,16 +2064,56 @@ describe("SessionsStore live refresh", () => {
     vi.clearAllMocks();
     storageData.clear();
     mockListSessions();
+    mockSidebarIndex();
     mockGetProjects();
   });
 
-  it("refetches when an events.subscribeDebounced callback fires", async () => {
+  it("messages events invalidate hydrated detail without reloading the index", async () => {
     const { events } = await import("./events.svelte.js");
-    // Capture the registered callback directly so the test bypasses
-    // the events singleton's debounce and any accumulated state.
     let registered: ((e: { scope: string }) => void) | null = null;
     const spy = vi
-      .spyOn(events, "subscribeDebounced")
+      .spyOn(events, "subscribe")
+      .mockImplementation((fn) => {
+        registered = fn as (e: { scope: string }) => void;
+        return () => {};
+      });
+
+    mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
+    const sessions = createSessionsStore();
+    await sessions.load();
+    vi.mocked(api.getSession)
+      .mockResolvedValueOnce(makeSession({
+        id: "row",
+        first_message: "first hydrate",
+      }))
+      .mockResolvedValueOnce(makeSession({
+        id: "row",
+        first_message: "second hydrate",
+      }));
+    await sessions.hydrateVisibleSessions(["row"]);
+
+    expect((api as any).getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+    expect(api.getSession).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalled();
+    expect(registered).not.toBeNull();
+
+    registered!({ scope: "messages" });
+    await sessions.hydrateVisibleSessions(["row"]);
+
+    expect((api as any).getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+    expect(api.getSession).toHaveBeenCalledTimes(2);
+    expect(sessions.sessions[0]!.first_message).toBe("second hydrate");
+
+    sessions.dispose();
+    spy.mockRestore();
+  });
+
+  it("sessions and sync events coalesce to one debounced index reload", async () => {
+    vi.useFakeTimers();
+    const { events } = await import("./events.svelte.js");
+    let registered: ((e: { scope: string }) => void) | null = null;
+    const spy = vi
+      .spyOn(events, "subscribe")
       .mockImplementation((fn) => {
         registered = fn as (e: { scope: string }) => void;
         return () => {};
@@ -2082,25 +2122,25 @@ describe("SessionsStore live refresh", () => {
     const sessions = createSessionsStore();
     await sessions.load();
     expect((api as any).getSidebarSessionIndex).toHaveBeenCalledTimes(1);
-    expect(spy).toHaveBeenCalled();
-    expect(registered).not.toBeNull();
 
-    registered!({ scope: "messages" });
-    // Flush the load() promise chain without advancing timers
-    // (the safety-net setInterval is real here and would loop).
-    await Promise.resolve();
-    await Promise.resolve();
+    registered!({ scope: "sessions" });
+    registered!({ scope: "sync" });
+    await vi.advanceTimersByTimeAsync(299);
+    expect((api as any).getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
     expect((api as any).getSidebarSessionIndex).toHaveBeenCalledTimes(2);
 
     sessions.dispose();
     spy.mockRestore();
+    vi.useRealTimers();
   });
 
   it("refetches on the 5-minute safety-net interval", async () => {
     vi.useFakeTimers();
     const { events } = await import("./events.svelte.js");
     const spy = vi
-      .spyOn(events, "subscribeDebounced")
+      .spyOn(events, "subscribe")
       .mockReturnValue(() => {});
 
     const sessions = createSessionsStore();
@@ -2123,7 +2163,7 @@ describe("SessionsStore live refresh", () => {
     const { events } = await import("./events.svelte.js");
     const unsub = vi.fn();
     const spy = vi
-      .spyOn(events, "subscribeDebounced")
+      .spyOn(events, "subscribe")
       .mockReturnValue(unsub);
 
     const sessions = createSessionsStore();

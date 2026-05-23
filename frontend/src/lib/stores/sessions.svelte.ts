@@ -1,4 +1,5 @@
 import * as api from "../api/client.js";
+import type { DataChangedEvent } from "../api/client.js";
 import type {
   Session,
   ProjectInfo,
@@ -10,6 +11,8 @@ import { events } from "./events.svelte.js";
 
 const SESSION_PAGE_SIZE = 500;
 const SIDEBAR_HYDRATION_CONCURRENCY = 6;
+const LIVE_REFRESH_DEBOUNCE_MS = 300;
+const SAFETY_NET_REFRESH_MS = 5 * 60 * 1000;
 
 export interface SessionGroupInput {
   id: string;
@@ -28,6 +31,7 @@ export interface SessionGroupInput {
   user_message_count?: number;
   is_automated?: boolean;
   is_teammate?: boolean;
+  is_index_only?: boolean;
 }
 
 export interface SessionGroup {
@@ -233,11 +237,13 @@ class SessionsStore {
     number,
     Map<string, Promise<void>>
   >();
+  private sidebarHydrationEpochByVersion = new Map<number, number>();
   private sidebarHydrationQueue: Array<() => void> = [];
   private sidebarHydrationActive = 0;
 
   private liveRefreshStarted = false;
   private unsubEvents: (() => void) | null = null;
+  private liveRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private safetyNetTimer: ReturnType<typeof setInterval> | null = null;
 
   get activeSession(): Session | undefined {
@@ -303,8 +309,7 @@ class SessionsStore {
     saveFilters(this.filters);
     this.startLiveRefresh();
     const version = ++this.loadVersion;
-    const indexVersion = ++this.sidebarIndexVersion;
-    this.hydratedSessionsByVersion.set(indexVersion, new Map());
+    const indexVersion = this.sidebarIndexVersion + 1;
     // Keep the existing list visible during reloads, but mark
     // loading=true so large filter expansions expose that more
     // pages are still being fetched after page 1 is published.
@@ -321,6 +326,9 @@ class SessionsStore {
       const index = await api.getSidebarSessionIndex(this.apiParams);
       if (this.loadVersion !== version) return;
 
+      this.sidebarIndexVersion = indexVersion;
+      this.hydratedSessionsByVersion.set(indexVersion, new Map());
+      this.sidebarHydrationEpochByVersion.set(indexVersion, 0);
       this.sessions = index.sessions.map(sidebarIndexRowToSession);
       this.nextCursor = null;
       this.total = index.total;
@@ -354,6 +362,7 @@ class SessionsStore {
     const inflight = this.sidebarHydrationInflightByVersion.get(version) ??
       new Map<string, Promise<void>>();
     this.sidebarHydrationInflightByVersion.set(version, inflight);
+    const epoch = this.sidebarHydrationEpochByVersion.get(version) ?? 0;
 
     await Promise.all(uniqueIds.map((id) => {
       if (cache.has(id)) return;
@@ -363,7 +372,12 @@ class SessionsStore {
       const promise = this.runSidebarHydration(async () => {
         try {
           const hydrated = await api.getSession(id);
-          if (version !== this.sidebarIndexVersion) return;
+          if (
+            version !== this.sidebarIndexVersion ||
+            epoch !== (this.sidebarHydrationEpochByVersion.get(version) ?? 0)
+          ) {
+            return;
+          }
           cache.set(id, hydrated);
           this.mergeHydratedSession(hydrated);
         } catch {
@@ -404,6 +418,19 @@ class SessionsStore {
       is_teammate: hydrated.is_teammate ?? current.is_teammate,
       is_index_only: false,
     };
+  }
+
+  private invalidateHydratedSessionDetails() {
+    const version = this.sidebarIndexVersion;
+    this.hydratedSessionsByVersion.set(version, new Map());
+    this.sidebarHydrationInflightByVersion.delete(version);
+    this.sidebarHydrationEpochByVersion.set(
+      version,
+      (this.sidebarHydrationEpochByVersion.get(version) ?? 0) + 1,
+    );
+    this.signalDetailCache.clear();
+    this.signalDetailInflight.clear();
+    this.signalDetailLoading = false;
   }
 
   async loadMore() {
@@ -939,19 +966,43 @@ class SessionsStore {
   private startLiveRefresh() {
     if (this.liveRefreshStarted) return;
     this.liveRefreshStarted = true;
-    this.unsubEvents = events.subscribeDebounced(
-      () => { this.load(); },
-    );
+    this.unsubEvents = events.subscribe((event) => {
+      this.handleLiveRefreshEvent(event);
+    });
     this.safetyNetTimer = setInterval(
       () => { this.load(); },
-      5 * 60 * 1000,
+      SAFETY_NET_REFRESH_MS,
     );
+  }
+
+  private handleLiveRefreshEvent(event: DataChangedEvent) {
+    if (event.scope === "messages") {
+      this.invalidateHydratedSessionDetails();
+      return;
+    }
+    if (event.scope === "sessions" || event.scope === "sync") {
+      this.scheduleIndexRefresh();
+    }
+  }
+
+  private scheduleIndexRefresh() {
+    if (this.liveRefreshTimer !== null) {
+      clearTimeout(this.liveRefreshTimer);
+    }
+    this.liveRefreshTimer = setTimeout(() => {
+      this.liveRefreshTimer = null;
+      this.load();
+    }, LIVE_REFRESH_DEBOUNCE_MS);
   }
 
   dispose() {
     if (this.unsubEvents) {
       this.unsubEvents();
       this.unsubEvents = null;
+    }
+    if (this.liveRefreshTimer !== null) {
+      clearTimeout(this.liveRefreshTimer);
+      this.liveRefreshTimer = null;
     }
     if (this.safetyNetTimer !== null) {
       clearInterval(this.safetyNetTimer);
