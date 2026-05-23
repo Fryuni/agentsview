@@ -1295,6 +1295,36 @@ describe("SessionsStore", () => {
       sessions.navigateSession(1, filter);
       expect(sessions.activeSessionId).toBe("s3");
     });
+
+    it("hydrates an index-only target after keyboard navigation", async () => {
+      sessions.sessions = [
+        makeSession({ id: "s1" }),
+        makeSession({
+          id: "skinny",
+          first_message: null,
+          is_index_only: true,
+        }),
+      ];
+      sessions.activeSessionId = "s1";
+      vi.mocked(api.getSession).mockResolvedValue(
+        makeSession({
+          id: "skinny",
+          first_message: "hydrated from navigation",
+        }),
+      );
+
+      sessions.navigateSession(1);
+
+      expect(sessions.activeSessionId).toBe("skinny");
+      expect(sessions.activeSession).toBeUndefined();
+      await vi.waitFor(() => {
+        expect(sessions.activeSession?.first_message).toBe(
+          "hydrated from navigation",
+        );
+      });
+      expect(api.getSession).toHaveBeenCalledWith("skinny");
+      expect(sessions.sessions[1]!.is_index_only).toBe(false);
+    });
   });
 
   describe("loadProjects dedup", () => {

@@ -676,12 +676,16 @@ class SessionsStore {
       // an unstarred session while starred-only filter is on) — jump to
       // an edge so the keyboard shortcut doesn't silently fail.
       const edge = delta > 0 ? 0 : list.length - 1;
-      this.setActiveSession(list[edge]!.id);
+      const id = list[edge]!.id;
+      this.setActiveSession(id);
+      void this.hydrateSelectedIndexOnlySession(id);
       return;
     }
     const next = idx + delta;
     if (next >= 0 && next < list.length) {
-      this.setActiveSession(list[next]!.id);
+      const id = list[next]!.id;
+      this.setActiveSession(id);
+      void this.hydrateSelectedIndexOnlySession(id);
     }
   }
 
