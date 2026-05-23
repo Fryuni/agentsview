@@ -524,7 +524,56 @@ describe('MessagesStore', () => {
     expect(vi.mocked(api.getMessages)).toHaveBeenLastCalledWith(
       's1',
       expect.objectContaining({
-        from: 1,
+        from: 0,
+        limit: 1000,
+        direction: 'asc',
+      }),
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
+    );
+  });
+
+  it('should refresh earlier loaded messages when appending new messages', async () => {
+    vi.mocked(api.getSession).mockResolvedValue(
+      makeSession('s1', 2),
+    );
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([makeMessage(0), makeMessage(1)]),
+    );
+
+    await messages.loadSession('s1');
+    expect(messages.messages[0]!.content).toBe('msg 0');
+
+    const updatedEarlier = {
+      ...makeMessage(0),
+      content: 'msg 0 rewritten',
+      content_length: 'msg 0 rewritten'.length,
+    };
+    vi.mocked(api.getSession).mockResolvedValueOnce(
+      makeSession('s1', 3),
+    );
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([
+        updatedEarlier,
+        makeMessage(1),
+        makeMessage(2),
+      ]),
+    );
+
+    await messages.reload();
+
+    expect(messages.messageCount).toBe(3);
+    expect(messages.messages.map((m) => m.ordinal)).toEqual([
+      0, 1, 2,
+    ]);
+    expect(messages.messages[0]!.content).toBe(
+      'msg 0 rewritten',
+    );
+    expect(vi.mocked(api.getMessages)).toHaveBeenLastCalledWith(
+      's1',
+      expect.objectContaining({
+        from: 0,
         limit: 1000,
         direction: 'asc',
       }),

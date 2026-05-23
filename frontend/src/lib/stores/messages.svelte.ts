@@ -427,9 +427,8 @@ class MessagesStore {
       }
 
       if (newCount > oldCount && this.messages.length > 0) {
-        const lastOrdinal =
-          this.messages[this.messages.length - 1]!.ordinal;
-        await this.loadFrom(id, lastOrdinal, signal);
+        const oldestOrdinal = this.messages[0]!.ordinal;
+        await this.loadFrom(id, oldestOrdinal, signal);
         if (this.sessionId !== id) return;
 
         const newest =
