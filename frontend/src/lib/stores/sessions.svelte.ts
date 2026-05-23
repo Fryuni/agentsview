@@ -21,7 +21,7 @@ export interface SessionGroupInput {
   display_name?: string | null;
   started_at: string | null;
   ended_at: string | null;
-  created_at?: string;
+  created_at: string;
   termination_status?: string | null;
   message_count: number;
   user_message_count?: number;
