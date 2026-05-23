@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/sessionwatch"
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/sync"
@@ -144,6 +145,7 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 		Cursor:           f.Cursor,
 		Limit:            f.Limit,
 		MinToolFailures:  f.MinToolFailures,
+		HasSecret:        f.HasSecret,
 	}
 	if f.Outcome != "" {
 		filter.Outcome = strings.Split(f.Outcome, ",")
@@ -360,6 +362,126 @@ func (b *directBackend) Watch(
 		}
 	}()
 	return out, nil
+}
+
+// SearchContent maps the transport-neutral request to a
+// db.ContentSearchFilter, calls the store, and redacts secret-shaped
+// spans from each snippet unless Reveal is set.
+func (b *directBackend) SearchContent(
+	ctx context.Context, req ContentSearchRequest,
+) (*ContentSearchResult, error) {
+	if req.Mode == "fts" {
+		for _, s := range req.Sources {
+			if s != "messages" {
+				return nil, &db.SearchInputError{Msg: fmt.Sprintf(
+					"search: --fts searches messages only (got source %q)", s)}
+			}
+		}
+		req.Sources = []string{"messages"}
+	}
+	page, err := b.db.SearchContent(ctx, db.ContentSearchFilter{
+		Pattern:          req.Pattern,
+		Mode:             req.Mode,
+		Sources:          req.Sources,
+		ExcludeSystem:    req.ExcludeSystem,
+		Project:          req.Project,
+		ExcludeProject:   req.ExcludeProject,
+		Machine:          req.Machine,
+		Agent:            req.Agent,
+		Date:             req.Date,
+		DateFrom:         req.DateFrom,
+		DateTo:           req.DateTo,
+		ActiveSince:      req.ActiveSince,
+		IncludeChildren:  req.IncludeChildren,
+		IncludeAutomated: req.IncludeAutomated,
+		IncludeOneShot:   req.IncludeOneShot,
+		// The store builds snippets from the full source field and redacts
+		// secrets (including ones straddling the snippet window) unless reveal
+		// is set. Redacting the pre-truncated snippet here would miss those.
+		RevealSecrets: req.Reveal,
+		Limit:         req.Limit,
+		Cursor:        req.Cursor,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &ContentSearchResult{
+		Matches:    page.Matches,
+		NextCursor: page.NextCursor,
+	}, nil
+}
+
+const secretSourceChanged = "source changed; cannot reveal"
+
+func (b *directBackend) ListSecrets(
+	ctx context.Context, f SecretListFilter,
+) (*SecretFindingList, error) {
+	// Unspecified confidence shows definite findings only. Candidates
+	// (e.g. high-entropy assignments) are FP-prone investigative material
+	// and must be opted into explicitly with confidence "candidate" or
+	// "all". This matches the product meaning of has_secret and
+	// secret_leak_count, which count definite findings only.
+	confidence := f.Confidence
+	if confidence == "" {
+		confidence = secrets.ConfidenceDefinite
+	}
+	page, err := b.db.ListSecretFindings(ctx, db.SecretFindingFilter{
+		Project: f.Project, Agent: f.Agent,
+		DateFrom: f.DateFrom, DateTo: f.DateTo,
+		Rule: f.Rule, Confidence: confidence,
+		Limit: f.Limit, Cursor: f.Cursor,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if f.Reveal {
+		for i := range page.Findings {
+			page.Findings[i].RedactedMatch = b.revealFinding(ctx, page.Findings[i])
+		}
+	}
+	return &SecretFindingList{
+		Findings: page.Findings, NextCursor: page.NextCursor,
+	}, nil
+}
+
+func (b *directBackend) ScanSecrets(
+	ctx context.Context, in SecretScanInput,
+	progress func(SecretScanProgress),
+) (*SecretScanSummary, error) {
+	if b.engine == nil {
+		return nil, db.ErrReadOnly
+	}
+	sum, err := b.engine.ScanSecrets(ctx, sync.SecretScanInput{
+		Backfill: in.Backfill, Project: in.Project, Agent: in.Agent,
+		DateFrom: in.DateFrom, DateTo: in.DateTo,
+	}, func(p sync.SecretScanProgress) {
+		if progress != nil {
+			progress(SecretScanProgress{Scanned: p.Scanned, Total: p.Total})
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &SecretScanSummary{
+		Scanned: sum.Scanned, WithSecrets: sum.WithSecrets,
+		TotalFindings: sum.TotalFindings,
+	}, nil
+}
+
+// revealFinding re-reads the finding's source by its stored coordinates and
+// returns the full value only if the same rule still matches there; otherwise
+// a marker. It never logs or stores the value.
+func (b *directBackend) revealFinding(
+	ctx context.Context, f db.SecretFindingRow,
+) string {
+	src, ok, err := b.db.SecretFindingSource(ctx, f.SecretFinding)
+	if err != nil || !ok {
+		return secretSourceChanged
+	}
+	if !secrets.Verify(f.RuleName, src, f.MatchStart, f.MatchEnd) {
+		return secretSourceChanged
+	}
+	return src[f.MatchStart:f.MatchEnd]
 }
 
 // Stats delegates to db.GetSessionStats on the underlying *db.DB.

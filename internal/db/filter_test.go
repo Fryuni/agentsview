@@ -1075,6 +1075,31 @@ func TestIsAutomatedSetOnUpsert(t *testing.T) {
 	}
 }
 
+func TestListSessionsHasSecret(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "leaky", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 2
+	})
+	// secret_leak_count is owned solely by the findings path; UpsertSession
+	// (used by insertSession) does NOT persist it, so set it via the findings
+	// API rather than the Session mutator.
+	if err := d.ReplaceSessionSecretFindings("leaky", nil, 3, "v"); err != nil {
+		t.Fatalf("ReplaceSessionSecretFindings: %v", err)
+	}
+	insertSession(t, d, "clean", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 2
+	})
+	page, err := d.ListSessions(context.Background(), SessionFilter{HasSecret: true})
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(page.Sessions) != 1 || page.Sessions[0].ID != "leaky" {
+		t.Fatalf("HasSecret filter = %+v, want only leaky", page.Sessions)
+	}
+}
+
 func TestIncrementalUpdateClearsAutomated(t *testing.T) {
 	d := testDB(t)
 

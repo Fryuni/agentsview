@@ -7,7 +7,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
-	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 func (s *Server) handleListSessions(
@@ -43,24 +42,8 @@ func (s *Server) handleListSessions(
 	date := q.Get("date")
 	dateFrom := q.Get("date_from")
 	dateTo := q.Get("date_to")
-
-	for _, d := range []string{date, dateFrom, dateTo} {
-		if d != "" && !timeutil.IsValidDate(d) {
-			writeError(w, http.StatusBadRequest,
-				"invalid date format: use YYYY-MM-DD")
-			return
-		}
-	}
-	if dateFrom != "" && dateTo != "" && dateFrom > dateTo {
-		writeError(w, http.StatusBadRequest,
-			"date_from must not be after date_to")
-		return
-	}
-
 	activeSince := q.Get("active_since")
-	if activeSince != "" && !timeutil.IsValidTimestamp(activeSince) {
-		writeError(w, http.StatusBadRequest,
-			"invalid active_since: use RFC3339 timestamp")
+	if !validateDateFilters(w, date, dateFrom, dateTo, activeSince) {
 		return
 	}
 
@@ -94,6 +77,7 @@ func (s *Server) handleListSessions(
 		}
 		filter.MinToolFailures = &n
 	}
+	filter.HasSecret = q.Get("has_secret") == "true"
 
 	page, err := s.sessions.List(r.Context(), filter)
 	if err != nil {
