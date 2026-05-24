@@ -417,6 +417,43 @@ describe("SessionsStore", () => {
       expect(sessions.sessions[0]!.first_message).toBeNull();
     });
 
+    it("prunes hydration caches from stale index versions", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "old" })]);
+      vi.mocked(api.getSession).mockResolvedValue(
+        makeSession({ id: "old", first_message: "old detail" }),
+      );
+      await sessions.load();
+      const oldVersion = (sessions as any).sidebarIndexVersion;
+      await (sessions as any).hydrateVisibleSessions(["old"]);
+
+      expect((sessions as any).hydratedSessionsByVersion.has(oldVersion))
+        .toBe(true);
+      expect(
+        (sessions as any).sidebarHydrationInflightByVersion.has(oldVersion),
+      ).toBe(true);
+      expect(
+        (sessions as any).sidebarHydrationEpochByVersion.has(oldVersion),
+      ).toBe(true);
+
+      mockSidebarIndex([makeSkinnyRow({ id: "new" })]);
+      await sessions.load();
+      const newVersion = (sessions as any).sidebarIndexVersion;
+
+      expect(oldVersion).not.toBe(newVersion);
+      expect((sessions as any).hydratedSessionsByVersion.has(oldVersion))
+        .toBe(false);
+      expect(
+        (sessions as any).sidebarHydrationInflightByVersion.has(oldVersion),
+      ).toBe(false);
+      expect(
+        (sessions as any).sidebarHydrationEpochByVersion.has(oldVersion),
+      ).toBe(false);
+      expect([...((sessions as any).hydratedSessionsByVersion.keys())])
+        .toEqual([newVersion]);
+      expect([...((sessions as any).sidebarHydrationEpochByVersion.keys())])
+        .toEqual([newVersion]);
+    });
+
     it("dedupes overlapping visible hydration for the same session", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "same" })]);
       await sessions.load();

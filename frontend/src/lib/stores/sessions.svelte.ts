@@ -329,6 +329,7 @@ class SessionsStore {
       this.sidebarIndexVersion = indexVersion;
       this.hydratedSessionsByVersion.set(indexVersion, new Map());
       this.sidebarHydrationEpochByVersion.set(indexVersion, 0);
+      this.pruneSidebarHydrationVersions(indexVersion);
       const previousById = new Map(prev.sessions.map((s) => [s.id, s]));
       this.sessions = index.sessions.map((row) =>
         sidebarIndexRowToSession(row, previousById.get(row.id))
@@ -353,6 +354,24 @@ class SessionsStore {
   sidebarIndexVersion: number = $state(0);
   hydratedSessionsByVersion: Map<number, Map<string, Session>> =
     $state(new Map());
+
+  private pruneSidebarHydrationVersions(retainVersion: number) {
+    for (const version of this.hydratedSessionsByVersion.keys()) {
+      if (version !== retainVersion) {
+        this.hydratedSessionsByVersion.delete(version);
+      }
+    }
+    for (const version of this.sidebarHydrationInflightByVersion.keys()) {
+      if (version !== retainVersion) {
+        this.sidebarHydrationInflightByVersion.delete(version);
+      }
+    }
+    for (const version of this.sidebarHydrationEpochByVersion.keys()) {
+      if (version !== retainVersion) {
+        this.sidebarHydrationEpochByVersion.delete(version);
+      }
+    }
+  }
 
   async hydrateVisibleSessions(
     ids: string[],
