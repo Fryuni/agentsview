@@ -48,6 +48,7 @@ const pgSessionCols = `id, project, machine, agent,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
 	parser_malformed_lines, is_truncated,
+	secret_leak_count, secrets_rules_version,
 	deleted_at, termination_status`
 
 // paramBuilder generates numbered PostgreSQL placeholders.
@@ -155,6 +156,7 @@ func scanPGSession(
 		&s.Cwd, &s.GitBranch,
 		&s.SourceSessionID, &s.SourceVersion,
 		&s.ParserMalformedLines, &s.IsTruncated,
+		&s.SecretLeakCount, &s.SecretsRulesVersion,
 		&deletedAt, &s.TerminationStatus,
 	)
 	if err != nil {
@@ -338,6 +340,23 @@ func buildPGSessionFilter(
 		filterPreds = append(filterPreds,
 			"tool_failure_signal_count >= "+
 				pb.add(*f.MinToolFailures))
+	}
+	if f.HasSecret {
+		pred := "secret_leak_count > 0"
+		if len(f.SecretsRulesVersions) > 0 {
+			var versionParams []string
+			for _, v := range f.SecretsRulesVersions {
+				if v == "" {
+					continue
+				}
+				versionParams = append(versionParams, pb.add(v))
+			}
+			if len(versionParams) > 0 {
+				pred += " AND secrets_rules_version IN (" +
+					strings.Join(versionParams, ",") + ")"
+			}
+		}
+		filterPreds = append(filterPreds, pred)
 	}
 
 	if !f.IncludeChildren {

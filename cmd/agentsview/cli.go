@@ -67,6 +67,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newSessionCommand())
 	root.AddCommand(newStatsCommand())
 	root.AddCommand(newClassifierCommand())
+	root.AddCommand(newSecretsCommand())
 	root.AddCommand(newVersionCommand())
 
 	defaultHelp := root.HelpFunc()
@@ -135,6 +136,23 @@ func newSyncCommand() *cobra.Command {
 		&cfg.Port, "port", 0,
 		"SSH port for remote sync (default: 22)",
 	)
+	cmd.Flags().StringVar(
+		&cfg.CPUProfile, "cpuprofile", "",
+		"Write CPU profile to file (developer use)",
+	)
+	cmd.Flags().StringVar(
+		&cfg.MemProfile, "memprofile", "",
+		"Write memory profile to file (developer use)",
+	)
+	cmd.Flags().StringVar(
+		&cfg.Trace, "trace", "",
+		"Write runtime trace to file (developer use)",
+	)
+	for _, name := range []string{"cpuprofile", "memprofile", "trace"} {
+		if err := cmd.Flags().MarkHidden(name); err != nil {
+			panic(err)
+		}
+	}
 	return cmd
 }
 

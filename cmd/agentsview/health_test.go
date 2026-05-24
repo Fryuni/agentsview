@@ -236,6 +236,7 @@ func TestPrintHealthDetail(t *testing.T) {
 		CompactionCount:        1,
 		ContextPressureMax:     &pressure,
 		GitBranch:              "main",
+		SecretLeakCount:        5,
 	}
 
 	var buf bytes.Buffer
@@ -253,6 +254,7 @@ func TestPrintHealthDetail(t *testing.T) {
 		"Tool retries:         2",
 		"Edit churn:           3",
 		"Consecutive fails:    4",
+		"Secret findings:      5",
 		"Compactions:          1",
 		"Context pressure:     45%",
 	} {

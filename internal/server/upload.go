@@ -279,6 +279,10 @@ func sessionBatchWriteFromParsed(
 		}
 	}
 
+	// Signals and Findings are intentionally not computed for uploads:
+	// the upload path does not run the sync engine's derived-data
+	// pipeline, so zero-valued signal columns and no findings rows are
+	// the expected state for freshly uploaded sessions.
 	return db.SessionBatchWrite{
 		Session:         dbSess,
 		Messages:        dbMsgs,

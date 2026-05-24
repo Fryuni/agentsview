@@ -411,10 +411,22 @@ func (s *Sync) pushBatch(
 			return batchResult{}, nil
 		}
 
-		// Bump updated_at when messages were rewritten
-		// but pushSession was a metadata no-op (its
-		// WHERE clause skips unchanged rows).
-		if msgCount > 0 {
+		findingsChanged, err := s.pushSecretFindings(ctx, tx, sess.ID)
+		if err != nil {
+			log.Printf(
+				"pgsync: secret findings %s: %v",
+				sess.ID, err,
+			)
+			_ = tx.Rollback()
+			*pushed = (*pushed)[:len(*pushed)-n]
+			return batchResult{}, nil
+		}
+
+		// Bump updated_at when messages or secret findings were
+		// rewritten but pushSession was a metadata no-op (its
+		// WHERE clause skips unchanged rows). PG read-mode session
+		// watchers rely on updated_at to surface secret-only changes.
+		if msgCount > 0 || findingsChanged {
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE sessions
 				SET updated_at = NOW()
@@ -673,6 +685,8 @@ func sessionPushFingerprint(
 		fmt.Sprintf("%d", sess.ParserMalformedLines),
 		fmt.Sprintf("%t", sess.IsTruncated),
 		stringValue(sess.TerminationStatus),
+		fmt.Sprintf("%d", sess.SecretLeakCount),
+		sess.SecretsRulesVersion,
 		usageEventFingerprint,
 	}
 	var b strings.Builder
@@ -769,6 +783,7 @@ func (s *Sync) pushSession(
 			context_pressure_max,
 			health_score, health_grade,
 			has_tool_calls, has_context_data,
+			secret_leak_count, secrets_rules_version,
 			updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
@@ -783,6 +798,7 @@ func (s *Sync) pushSession(
 			$37, $38,
 			$39,
 			$40, $41, $42, $43,
+			$44, $45,
 			NOW()
 		)
 		ON CONFLICT (id) DO UPDATE SET
@@ -828,6 +844,8 @@ func (s *Sync) pushSession(
 			health_grade = EXCLUDED.health_grade,
 			has_tool_calls = EXCLUDED.has_tool_calls,
 			has_context_data = EXCLUDED.has_context_data,
+			secret_leak_count = EXCLUDED.secret_leak_count,
+			secrets_rules_version = EXCLUDED.secrets_rules_version,
 			updated_at = NOW()
 		WHERE sessions.machine IS DISTINCT FROM EXCLUDED.machine
 			OR sessions.project IS DISTINCT FROM EXCLUDED.project
@@ -870,7 +888,9 @@ func (s *Sync) pushSession(
 			OR sessions.health_score IS DISTINCT FROM EXCLUDED.health_score
 			OR sessions.health_grade IS DISTINCT FROM EXCLUDED.health_grade
 			OR sessions.has_tool_calls IS DISTINCT FROM EXCLUDED.has_tool_calls
-			OR sessions.has_context_data IS DISTINCT FROM EXCLUDED.has_context_data`,
+			OR sessions.has_context_data IS DISTINCT FROM EXCLUDED.has_context_data
+			OR sessions.secret_leak_count IS DISTINCT FROM EXCLUDED.secret_leak_count
+			OR sessions.secrets_rules_version IS DISTINCT FROM EXCLUDED.secrets_rules_version`,
 		sess.ID, s.machine,
 		sanitizePG(sess.Project),
 		sess.Agent,
@@ -898,6 +918,7 @@ func (s *Sync) pushSession(
 		sess.ContextPressureMax,
 		sess.HealthScore, nilStr(sess.HealthGrade),
 		sess.HasToolCalls, sess.HasContextData,
+		sess.SecretLeakCount, sess.SecretsRulesVersion,
 	)
 	return err
 }
@@ -1717,6 +1738,92 @@ func bulkInsertToolResultEvents(
 		}
 	}
 	return nil
+}
+
+// pushSecretFindings replaces a session's secret findings in PG.
+// It deletes all existing rows for the session then bulk-inserts
+// the current local set. It reports whether it changed any rows
+// (deleted existing or inserted new) so the caller can bump
+// sessions.updated_at for secret-only changes that pushSession and
+// pushMessages would otherwise miss. Per-finding rules_version is
+// pushed via this table; the session-level
+// sessions.secrets_rules_version is pushed by pushSession alongside
+// the rest of the session columns.
+func (s *Sync) pushSecretFindings(
+	ctx context.Context, tx *sql.Tx, sessionID string,
+) (bool, error) {
+	res, err := tx.ExecContext(ctx,
+		`DELETE FROM secret_findings WHERE session_id = $1`,
+		sessionID,
+	)
+	if err != nil {
+		return false, fmt.Errorf(
+			"deleting pg secret_findings for %s: %w",
+			sessionID, err,
+		)
+	}
+	deleted, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf(
+			"counting deleted secret_findings for %s: %w",
+			sessionID, err,
+		)
+	}
+
+	findings, err := s.local.SessionSecretFindings(ctx, sessionID)
+	if err != nil {
+		return false, fmt.Errorf(
+			"reading local secret_findings for %s: %w",
+			sessionID, err,
+		)
+	}
+	if len(findings) == 0 {
+		return deleted > 0, nil
+	}
+
+	const sfBatch = 50
+	for i := 0; i < len(findings); i += sfBatch {
+		end := min(i+sfBatch, len(findings))
+		batch := findings[i:end]
+
+		var b strings.Builder
+		b.WriteString(`INSERT INTO secret_findings (
+			session_id, rule_name, confidence,
+			location_kind, message_ordinal,
+			call_index, event_index,
+			match_start, match_end, match_index,
+			redacted_match, rules_version) VALUES `)
+		const cols = 12
+		args := make([]any, 0, len(batch)*cols)
+		for j, f := range batch {
+			if j > 0 {
+				b.WriteByte(',')
+			}
+			p := j*cols + 1
+			fmt.Fprintf(&b,
+				"($%d,$%d,$%d,$%d,$%d,"+
+					"$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+				p, p+1, p+2, p+3, p+4,
+				p+5, p+6, p+7, p+8, p+9, p+10, p+11,
+			)
+			args = append(args,
+				f.SessionID, f.RuleName, f.Confidence,
+				f.LocationKind, f.MessageOrdinal,
+				f.CallIndex, f.EventIndex,
+				f.MatchStart, f.MatchEnd, f.MatchIndex,
+				f.RedactedMatch, f.RulesVersion,
+			)
+		}
+		if _, err := tx.ExecContext(
+			ctx, b.String(), args...,
+		); err != nil {
+			return false, fmt.Errorf(
+				"bulk inserting secret_findings for %s: %w",
+				sessionID, err,
+			)
+		}
+	}
+	return true, nil
 }
 
 // normalizeSyncTimestamps ensures schema exists and normalizes

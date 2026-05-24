@@ -44,6 +44,7 @@ const sessionBaseCols = `id, project, machine, agent,
 	context_pressure_max,
 	health_score, health_grade,
 	has_tool_calls, has_context_data,
+	secret_leak_count, secrets_rules_version,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
 	parser_malformed_lines, is_truncated,
@@ -67,6 +68,7 @@ const sessionPruneCols = `id, project, machine, agent,
 	context_pressure_max,
 	health_score, health_grade,
 	has_tool_calls, has_context_data,
+	secret_leak_count, secrets_rules_version,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
 	parser_malformed_lines, is_truncated,
@@ -89,6 +91,7 @@ const sessionFullCols = `id, project, machine, agent,
 	context_pressure_max,
 	health_score, health_grade,
 	has_tool_calls, has_context_data,
+	secret_leak_count, secrets_rules_version,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
 	parser_malformed_lines, is_truncated,
@@ -129,6 +132,7 @@ func scanSessionRow(rs rowScanner) (Session, error) {
 		&s.ContextPressureMax,
 		&s.HealthScore, &s.HealthGrade,
 		&s.HasToolCalls, &s.HasContextData,
+		&s.SecretLeakCount, &s.SecretsRulesVersion,
 		&s.DataVersion,
 		&s.Cwd, &s.GitBranch,
 		&s.SourceSessionID, &s.SourceVersion,
@@ -175,6 +179,8 @@ type Session struct {
 	HealthGrade            *string  `json:"health_grade,omitempty"`
 	HasToolCalls           bool     `json:"-"`
 	HasContextData         bool     `json:"-"`
+	SecretLeakCount        int      `json:"secret_leak_count"`
+	SecretsRulesVersion    string   `json:"-"`
 	DataVersion            int      `json:"-"`
 	Cwd                    string   `json:"cwd,omitempty"`
 	GitBranch              string   `json:"git_branch,omitempty"`
@@ -291,8 +297,13 @@ type SessionFilter struct {
 	Outcome          []string // filter by outcome values
 	HealthGrade      []string // filter by health grade values
 	MinToolFailures  *int     // minimum tool_failure_signal_count
-	Cursor           string   // opaque cursor from previous page
-	Limit            int
+	HasSecret        bool     // only sessions with current secret_leak_count > 0
+	// SecretsRulesVersions limits HasSecret to sessions scanned by one of these
+	// current scanner versions. Empty preserves raw DB semantics for tests and
+	// direct store callers that explicitly want unversioned counts.
+	SecretsRulesVersions []string
+	Cursor               string // opaque cursor from previous page
+	Limit                int
 	// Termination filters by termination_status:
 	//   "" or "all"  → no filter (default)
 	//   "clean"      → only sessions with status = 'clean'
@@ -527,6 +538,24 @@ func buildSessionFilter(f SessionFilter) (string, []any) {
 			"tool_failure_signal_count >= ?")
 		filterArgs = append(filterArgs, *f.MinToolFailures)
 	}
+	if f.HasSecret {
+		pred := "secret_leak_count > 0"
+		if len(f.SecretsRulesVersions) > 0 {
+			placeholders := make([]string, 0, len(f.SecretsRulesVersions))
+			for _, v := range f.SecretsRulesVersions {
+				if v == "" {
+					continue
+				}
+				placeholders = append(placeholders, "?")
+				filterArgs = append(filterArgs, v)
+			}
+			if len(placeholders) > 0 {
+				pred += " AND secrets_rules_version IN (" +
+					strings.Join(placeholders, ",") + ")"
+			}
+		}
+		filterPreds = append(filterPreds, pred)
+	}
 
 	// Simple case: children not included — basePreds already
 	// carries the relationship_type guard, so subagent/fork
@@ -707,6 +736,7 @@ func (db *DB) GetSessionFull(
 		&s.ContextPressureMax,
 		&s.HealthScore, &s.HealthGrade,
 		&s.HasToolCalls, &s.HasContextData,
+		&s.SecretLeakCount, &s.SecretsRulesVersion,
 		&s.DataVersion,
 		&s.Cwd, &s.GitBranch,
 		&s.SourceSessionID, &s.SourceVersion,
@@ -1622,6 +1652,7 @@ func (db *DB) FindPruneCandidates(
 			&s.ContextPressureMax,
 			&s.HealthScore, &s.HealthGrade,
 			&s.HasToolCalls, &s.HasContextData,
+			&s.SecretLeakCount, &s.SecretsRulesVersion,
 			&s.DataVersion,
 			&s.Cwd, &s.GitBranch,
 			&s.SourceSessionID, &s.SourceVersion,
@@ -1898,6 +1929,7 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.ContextPressureMax,
 			&s.HealthScore, &s.HealthGrade,
 			&s.HasToolCalls, &s.HasContextData,
+			&s.SecretLeakCount, &s.SecretsRulesVersion,
 			&s.DataVersion,
 			&s.Cwd, &s.GitBranch,
 			&s.SourceSessionID, &s.SourceVersion,

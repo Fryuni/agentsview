@@ -24,10 +24,22 @@ func isRemoteAuth(r *http.Request) bool {
 	return v
 }
 
-// isLocalhostRequest returns true when the request originates from
-// a loopback address (127.0.0.0/8, ::1). It checks RemoteAddr,
-// which is set by net/http to the client's IP.
+// isLocalhostRequest returns true only for a request that arrived as a
+// direct loopback connection (127.0.0.0/8, ::1) and was not relayed by a
+// reverse proxy. Callers use it to gate exposure of secrets (the auth token,
+// unredacted search snippets) to "local only" clients.
+//
+// RemoteAddr alone is insufficient: a managed Caddy proxy reverse-proxies to
+// the loopback backend, so every proxied request — including ones from remote
+// LAN clients allowed through the proxy — would carry a loopback RemoteAddr.
+// Proxies add X-Forwarded-For/X-Real-IP/Forwarded, so any of those headers
+// means the connection is not a direct local one and must not be trusted. A
+// genuinely local attacker spoofing these headers only denies themselves, so
+// the check fails closed.
 func isLocalhostRequest(r *http.Request) bool {
+	if hasForwardingHeader(r) {
+		return false
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
@@ -37,6 +49,15 @@ func isLocalhostRequest(r *http.Request) bool {
 		return false
 	}
 	return ip.IsLoopback()
+}
+
+// hasForwardingHeader reports whether the request carries any header a reverse
+// proxy adds when relaying a client, which indicates the connection reached
+// the server through a proxy rather than directly.
+func hasForwardingHeader(r *http.Request) bool {
+	return r.Header.Get("X-Forwarded-For") != "" ||
+		r.Header.Get("X-Real-IP") != "" ||
+		r.Header.Get("Forwarded") != ""
 }
 
 // authMiddleware enforces Bearer token authentication when

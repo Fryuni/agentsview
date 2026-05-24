@@ -437,6 +437,7 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		"cwd", "git_branch", "source_session_id",
 		"source_version", "parser_malformed_lines",
 		"is_truncated",
+		"secret_leak_count", "secrets_rules_version",
 	} {
 		if oldDBHasColumn(ctx, tx, "sessions", c) {
 			cols = append(cols, c)
@@ -527,7 +528,8 @@ func copySessionDataForIDs(
 			AND new_m.ordinal = old_m.ordinal
 		WHERE otc.session_id IN (
 			SELECT id FROM `+tempIDsTable+`
-		)`,
+		)
+		ORDER BY otc.id`,
 	); err != nil {
 		return fmt.Errorf("copying tool_calls: %w", err)
 	}
@@ -554,6 +556,27 @@ func copySessionDataForIDs(
 			return fmt.Errorf(
 				"copying tool_result_events: %w", err,
 			)
+		}
+	}
+
+	if oldDBHasTable(ctx, tx, "secret_findings") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO secret_findings
+				(session_id, rule_name, confidence, location_kind,
+				 message_ordinal, call_index, event_index,
+				 match_start, match_end, match_index,
+				 redacted_match, rules_version, created_at)
+			SELECT
+				session_id, rule_name, confidence, location_kind,
+				message_ordinal, call_index, event_index,
+				match_start, match_end, match_index,
+				redacted_match, rules_version, created_at
+			FROM old_db.secret_findings
+			WHERE session_id IN (
+				SELECT id FROM `+tempIDsTable+`
+			)`,
+		); err != nil {
+			return fmt.Errorf("copying secret_findings: %w", err)
 		}
 	}
 

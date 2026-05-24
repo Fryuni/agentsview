@@ -27,12 +27,18 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 28: Gemini parser now persists normalized
+// Bumped to 29: secret findings now record tool_result_event
+// coordinates by the persisted slice position (matching
+// tool_result_events.event_index) instead of the parser's raw event
+// index. Existing rows need re-scanning so stored findings normalize
+// and `secrets list --reveal` can re-read the source.
+//
+// (28: Gemini parser now persists normalized
 // (Anthropic-style) per-message token_usage JSON instead of the raw
 // tokens object, and rolls thoughts tokens into OutputTokens so
 // per-message and session output totals match the cost JSON.
 // Existing Gemini rows need re-parsing so usage and cost reports
-// reflect the new shape and include thoughts tokens.
+// reflect the new shape and include thoughts tokens.)
 //
 // (27: Piebald parser now persists normalized per-message
 // token_usage JSON. Existing Piebald rows need re-parsing so Usage
@@ -88,7 +94,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 28
+const dataVersion = 29
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -554,6 +560,14 @@ func (db *DB) migrateColumns() error {
 			"sessions", "termination_status",
 			"ALTER TABLE sessions ADD COLUMN termination_status TEXT",
 		},
+		{
+			"sessions", "secret_leak_count",
+			"ALTER TABLE sessions ADD COLUMN secret_leak_count INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "secrets_rules_version",
+			"ALTER TABLE sessions ADD COLUMN secrets_rules_version TEXT NOT NULL DEFAULT ''",
+		},
 	}
 
 	for _, m := range migrations {
@@ -664,6 +678,8 @@ func (db *DB) createPartialIndexesLocked(w *sql.DB) error {
 		 ON messages(session_id) WHERE is_sidechain = 1`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_source_uuid
 		 ON messages(source_uuid) WHERE source_uuid != ''`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_has_secret
+		 ON sessions(secret_leak_count) WHERE secret_leak_count > 0`,
 	}
 	for _, ddl := range indexes {
 		if _, err := w.Exec(ddl); err != nil {

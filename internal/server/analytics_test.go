@@ -403,6 +403,67 @@ func TestActiveSinceValidation(t *testing.T) {
 	}
 }
 
+// TestDateFilterValidation pins that the content-search and secrets-list
+// endpoints reject malformed date filters with 400 instead of forwarding them
+// to the DB, where a date/timestamptz cast failure would surface as a 500.
+func TestDateFilterValidation(t *testing.T) {
+	te := setup(t)
+
+	tests := []struct {
+		name   string
+		path   string
+		params map[string]string
+		status int
+	}{
+		{
+			"Search_InvalidDate", "/api/v1/search/content",
+			map[string]string{"pattern": "x", "date": "not-a-date"},
+			http.StatusBadRequest,
+		},
+		{
+			"Search_InvalidDateFrom", "/api/v1/search/content",
+			map[string]string{"pattern": "x", "date_from": "2024-13-40"},
+			http.StatusBadRequest,
+		},
+		{
+			"Search_DateFromAfterDateTo", "/api/v1/search/content",
+			map[string]string{
+				"pattern": "x", "date_from": "2024-06-03", "date_to": "2024-06-01",
+			},
+			http.StatusBadRequest,
+		},
+		{
+			"Search_InvalidActiveSince", "/api/v1/search/content",
+			map[string]string{"pattern": "x", "active_since": "garbage"},
+			http.StatusBadRequest,
+		},
+		{
+			"Search_ValidDates", "/api/v1/search/content",
+			map[string]string{
+				"pattern": "x", "date_from": "2024-06-01", "date_to": "2024-06-03",
+			},
+			http.StatusOK,
+		},
+		{
+			"Secrets_InvalidDateFrom", "/api/v1/secrets",
+			map[string]string{"date_from": "bad-date"},
+			http.StatusBadRequest,
+		},
+		{
+			"Secrets_ValidDates", "/api/v1/secrets",
+			map[string]string{"date_from": "2024-06-01", "date_to": "2024-06-03"},
+			http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := te.get(t, buildPathURL(tt.path, tt.params))
+			assertStatus(t, w, tt.status)
+		})
+	}
+}
+
 func TestAnalyticsActivity(t *testing.T) {
 	te := setup(t)
 	stats := seedAnalyticsEnv(t, te)

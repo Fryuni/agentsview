@@ -335,6 +335,7 @@ func TestReplaceSessionMessages_LargeSession(t *testing.T) {
 	}
 	t.Parallel()
 	d := testDB(t)
+	requireFTS(t, d)
 	const sessionID = "perf-large"
 	insertSession(t, d, sessionID, "proj")
 
