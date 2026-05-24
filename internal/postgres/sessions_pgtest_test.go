@@ -79,4 +79,36 @@ func TestListSessions_HasSecret(t *testing.T) {
 			found.SecretLeakCount,
 		)
 	}
+
+	_, err = pg.Exec(`
+		UPDATE sessions
+		SET secrets_rules_version = 'v-current'
+		WHERE id = 'has-secret-leaky';
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, ended_at, message_count,
+			 user_message_count, secret_leak_count, secrets_rules_version)
+		VALUES
+			('has-secret-stale', 'test-machine', 'test-project',
+			 'claude-code', 'stale secret session',
+			 '2026-03-12T07:00:00Z'::timestamptz,
+			 '2026-03-12T07:30:00Z'::timestamptz,
+			 2, 1, 2, 'old-rules')
+	`)
+	if err != nil {
+		t.Fatalf("seeding stale secret session: %v", err)
+	}
+	current, err := store.ListSessions(ctx, db.SessionFilter{
+		HasSecret:            true,
+		SecretsRulesVersions: []string{"v-current"},
+		Limit:                50,
+	})
+	if err != nil {
+		t.Fatalf("ListSessions current rules: %v", err)
+	}
+	for _, s := range current.Sessions {
+		if s.ID == "has-secret-stale" {
+			t.Fatal("stale secret session included in versioned HasSecret results")
+		}
+	}
 }

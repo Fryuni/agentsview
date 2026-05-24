@@ -342,8 +342,21 @@ func buildPGSessionFilter(
 				pb.add(*f.MinToolFailures))
 	}
 	if f.HasSecret {
-		filterPreds = append(filterPreds,
-			"secret_leak_count > 0")
+		pred := "secret_leak_count > 0"
+		if len(f.SecretsRulesVersions) > 0 {
+			var versionParams []string
+			for _, v := range f.SecretsRulesVersions {
+				if v == "" {
+					continue
+				}
+				versionParams = append(versionParams, pb.add(v))
+			}
+			if len(versionParams) > 0 {
+				pred += " AND secrets_rules_version IN (" +
+					strings.Join(versionParams, ",") + ")"
+			}
+		}
+		filterPreds = append(filterPreds, pred)
 	}
 
 	if !f.IncludeChildren {

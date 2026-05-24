@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -56,6 +57,7 @@ func (b *directBackend) Get(
 	if err != nil || s == nil {
 		return nil, err
 	}
+	hideStaleSecretCount(s, secrets.ActiveRulesVersions())
 	return buildSessionDetail(s), nil
 }
 
@@ -112,10 +114,12 @@ func (b *directBackend) List(
 		f.Limit = db.DefaultSessionLimit
 	}
 
-	page, err := b.db.ListSessions(ctx, listFilterToDB(f))
+	filter := listFilterToDB(f)
+	page, err := b.db.ListSessions(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
+	hideStaleSecretCounts(page.Sessions, filter.SecretsRulesVersions)
 	return &SessionList{
 		Sessions:   page.Sessions,
 		NextCursor: page.NextCursor,
@@ -128,24 +132,25 @@ func (b *directBackend) List(
 // transports produce identical SessionFilter values.
 func listFilterToDB(f ListFilter) db.SessionFilter {
 	filter := db.SessionFilter{
-		Project:          f.Project,
-		ExcludeProject:   f.ExcludeProject,
-		Machine:          f.Machine,
-		Agent:            f.Agent,
-		Date:             f.Date,
-		DateFrom:         f.DateFrom,
-		DateTo:           f.DateTo,
-		ActiveSince:      f.ActiveSince,
-		MinMessages:      f.MinMessages,
-		MaxMessages:      f.MaxMessages,
-		MinUserMessages:  f.MinUserMessages,
-		ExcludeOneShot:   !f.IncludeOneShot,
-		ExcludeAutomated: !f.IncludeAutomated,
-		IncludeChildren:  f.IncludeChildren,
-		Cursor:           f.Cursor,
-		Limit:            f.Limit,
-		MinToolFailures:  f.MinToolFailures,
-		HasSecret:        f.HasSecret,
+		Project:              f.Project,
+		ExcludeProject:       f.ExcludeProject,
+		Machine:              f.Machine,
+		Agent:                f.Agent,
+		Date:                 f.Date,
+		DateFrom:             f.DateFrom,
+		DateTo:               f.DateTo,
+		ActiveSince:          f.ActiveSince,
+		MinMessages:          f.MinMessages,
+		MaxMessages:          f.MaxMessages,
+		MinUserMessages:      f.MinUserMessages,
+		ExcludeOneShot:       !f.IncludeOneShot,
+		ExcludeAutomated:     !f.IncludeAutomated,
+		IncludeChildren:      f.IncludeChildren,
+		Cursor:               f.Cursor,
+		Limit:                f.Limit,
+		MinToolFailures:      f.MinToolFailures,
+		HasSecret:            f.HasSecret,
+		SecretsRulesVersions: secrets.ActiveRulesVersions(),
 	}
 	if f.Outcome != "" {
 		filter.Outcome = strings.Split(f.Outcome, ",")
@@ -157,6 +162,22 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 		filter.Termination = f.Termination
 	}
 	return filter
+}
+
+func hideStaleSecretCounts(sessions []db.Session, activeVersions []string) {
+	for i := range sessions {
+		hideStaleSecretCount(&sessions[i], activeVersions)
+	}
+}
+
+func hideStaleSecretCount(s *db.Session, activeVersions []string) {
+	if s.SecretLeakCount == 0 {
+		return
+	}
+	if slices.Contains(activeVersions, s.SecretsRulesVersion) {
+		return
+	}
+	s.SecretLeakCount = 0
 }
 
 func (b *directBackend) Messages(

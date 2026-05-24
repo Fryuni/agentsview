@@ -297,9 +297,13 @@ type SessionFilter struct {
 	Outcome          []string // filter by outcome values
 	HealthGrade      []string // filter by health grade values
 	MinToolFailures  *int     // minimum tool_failure_signal_count
-	HasSecret        bool     // only sessions with secret_leak_count > 0
-	Cursor           string   // opaque cursor from previous page
-	Limit            int
+	HasSecret        bool     // only sessions with current secret_leak_count > 0
+	// SecretsRulesVersions limits HasSecret to sessions scanned by one of these
+	// current scanner versions. Empty preserves raw DB semantics for tests and
+	// direct store callers that explicitly want unversioned counts.
+	SecretsRulesVersions []string
+	Cursor               string // opaque cursor from previous page
+	Limit                int
 	// Termination filters by termination_status:
 	//   "" or "all"  → no filter (default)
 	//   "clean"      → only sessions with status = 'clean'
@@ -535,7 +539,22 @@ func buildSessionFilter(f SessionFilter) (string, []any) {
 		filterArgs = append(filterArgs, *f.MinToolFailures)
 	}
 	if f.HasSecret {
-		filterPreds = append(filterPreds, "secret_leak_count > 0")
+		pred := "secret_leak_count > 0"
+		if len(f.SecretsRulesVersions) > 0 {
+			placeholders := make([]string, 0, len(f.SecretsRulesVersions))
+			for _, v := range f.SecretsRulesVersions {
+				if v == "" {
+					continue
+				}
+				placeholders = append(placeholders, "?")
+				filterArgs = append(filterArgs, v)
+			}
+			if len(placeholders) > 0 {
+				pred += " AND secrets_rules_version IN (" +
+					strings.Join(placeholders, ",") + ")"
+			}
+		}
+		filterPreds = append(filterPreds, pred)
 	}
 
 	// Simple case: children not included — basePreds already

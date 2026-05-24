@@ -1098,6 +1098,25 @@ func TestListSessionsHasSecret(t *testing.T) {
 	if len(page.Sessions) != 1 || page.Sessions[0].ID != "leaky" {
 		t.Fatalf("HasSecret filter = %+v, want only leaky", page.Sessions)
 	}
+
+	insertSession(t, d, "stale", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 2
+	})
+	if err := d.ReplaceSessionSecretFindings("stale", nil, 2, "old-rules"); err != nil {
+		t.Fatalf("ReplaceSessionSecretFindings stale: %v", err)
+	}
+	current, err := d.ListSessions(context.Background(), SessionFilter{
+		HasSecret:            true,
+		SecretsRulesVersions: []string{"v"},
+	})
+	if err != nil {
+		t.Fatalf("ListSessions current rules: %v", err)
+	}
+	if len(current.Sessions) != 1 || current.Sessions[0].ID != "leaky" {
+		t.Fatalf("versioned HasSecret filter = %+v, want only leaky",
+			current.Sessions)
+	}
 }
 
 func TestIncrementalUpdateClearsAutomated(t *testing.T) {

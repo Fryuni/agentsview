@@ -308,6 +308,9 @@ func TestFixtureDenyListSuppressesAgentsviewFixtures(t *testing.T) {
 		{"github_pat", "tok ghp_8Hk3Wn7Dz4Rp2Vx9Mb6Tj0Qc5Lm1Yp8Bv4Hg"},
 		{"stripe", "key=sk_live_7Qh3Wn8Dk4Rp9Vx2Mb6Tj0Qc5Lm done"},
 		{"google_api", "key=AIza7Qh3Wn8Dk4Rp9Vx2Mb6Tj0Qc5Lm1Yp8Bv4H end"},
+		{"ed25519_pem", "-----BEGIN PRIVATE KEY-----\n" +
+			"MC4CAQAwBQYDK2VwBCIEIHNhJUCu8VvJCV4O++0jHhjsfn4SwMjf3+3zctpGdZMe\n" +
+			"-----END PRIVATE KEY-----"},
 	}
 	for _, f := range fixtures {
 		t.Run(f.name, func(t *testing.T) {
