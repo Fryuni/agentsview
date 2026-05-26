@@ -1,8 +1,10 @@
 package postgres
 
 import (
-	"math"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -51,12 +53,8 @@ func TestCustomPricingOverridesPricingMap(t *testing.T) {
 			out := pricingRowsToMap(tt.dbPrices)
 			s.applyCustomPricing(out)
 			got, ok := out[tt.model]
-			if !ok {
-				t.Fatalf("model %q not in map", tt.model)
-			}
-			if math.Abs(got.input-tt.wantInput) > 0.001 {
-				t.Errorf("input = %.4f, want %.4f", got.input, tt.wantInput)
-			}
+			require.True(t, ok, "model %q not in map", tt.model)
+			assert.InDelta(t, tt.wantInput, got.input, 0.001)
 		})
 	}
 }

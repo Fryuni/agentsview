@@ -63,3 +63,4 @@ html/
 
 # Antigravity CLI session dir created when AGY runs inside this repo
 .antigravitycli/
+.kata.local.toml

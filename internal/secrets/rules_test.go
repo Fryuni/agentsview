@@ -3,6 +3,9 @@ package secrets
 import (
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDefiniteRules(t *testing.T) {
@@ -40,11 +43,12 @@ func TestDefiniteRules(t *testing.T) {
 					found = m.Rule
 				}
 			}
-			if c.want && found == "" {
-				t.Errorf("expected rule %q to match %q; got %+v", c.rule, c.text, got)
-			}
-			if !c.want && len(got) != 0 {
-				t.Errorf("expected no match for %q; got %+v", c.text, got)
+			if c.want {
+				assert.NotEmpty(t, found,
+					"expected rule %q to match %q; got %+v", c.rule, c.text, got)
+			} else {
+				assert.Empty(t, got,
+					"expected no match for %q; got %+v", c.text, got)
 			}
 		})
 	}
@@ -72,15 +76,13 @@ func TestCandidateRules(t *testing.T) {
 			for _, m := range got {
 				if m.Rule == c.rule {
 					found = true
-					if m.Confidence != ConfidenceCandidate {
-						t.Errorf("%s confidence = %q, want candidate", c.rule, m.Confidence)
-					}
+					assert.Equal(t, ConfidenceCandidate, m.Confidence,
+						"%s confidence", c.rule)
 				}
 			}
-			if found != c.want {
-				t.Errorf("rule %q match=%v want=%v for %q (got %+v)",
-					c.rule, found, c.want, c.text, got)
-			}
+			assert.Equal(t, c.want, found,
+				"rule %q match=%v want=%v for %q (got %+v)",
+				c.rule, found, c.want, c.text, got)
 		})
 	}
 }
@@ -91,21 +93,15 @@ func TestCandidateRules(t *testing.T) {
 func TestScanDefiniteReturnsOnlyDefinite(t *testing.T) {
 	// One definite AWS key and one candidate high-entropy assignment.
 	text := "aws AKIA7QHWN2DKR4FYPLJM and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6"
-	if full := Scan(text); len(full) != 2 {
-		t.Fatalf("precondition: Scan should report 2 matches (1 definite, 1 "+
-			"candidate), got %d: %+v", len(full), full)
-	}
+	full := Scan(text)
+	require.Len(t, full, 2,
+		"precondition: Scan should report 2 matches (1 definite, 1 candidate)")
 	got := ScanDefinite(text)
-	if len(got) != 1 {
-		t.Fatalf("ScanDefinite returned %d matches, want 1: %+v", len(got), got)
-	}
-	if got[0].Rule != "aws-access-key" {
-		t.Errorf("rule = %q, want aws-access-key", got[0].Rule)
-	}
+	require.Len(t, got, 1)
+	assert.Equal(t, "aws-access-key", got[0].Rule)
 	for _, m := range got {
-		if m.Confidence != ConfidenceDefinite {
-			t.Errorf("ScanDefinite returned non-definite match: %+v", m)
-		}
+		assert.Equal(t, ConfidenceDefinite, m.Confidence,
+			"ScanDefinite returned non-definite match: %+v", m)
 	}
 }
 
@@ -122,16 +118,13 @@ func TestScanDefiniteMatchesScanDefiniteSubset(t *testing.T) {
 		}
 	}
 	got := ScanDefinite(text)
-	if len(got) != len(wantDef) {
-		t.Fatalf("ScanDefinite count = %d, Scan definite count = %d (%+v vs %+v)",
-			len(got), len(wantDef), got, wantDef)
-	}
+	require.Len(t, got, len(wantDef),
+		"ScanDefinite count vs Scan definite count (%+v vs %+v)", got, wantDef)
 	for i := range got {
-		if got[i].Rule != wantDef[i].Rule || got[i].Start != wantDef[i].Start ||
-			got[i].End != wantDef[i].End || got[i].Redacted != wantDef[i].Redacted {
-			t.Errorf("match %d differs: ScanDefinite=%+v Scan=%+v",
-				i, got[i], wantDef[i])
-		}
+		assert.Equal(t, wantDef[i].Rule, got[i].Rule, "match %d rule differs", i)
+		assert.Equal(t, wantDef[i].Start, got[i].Start, "match %d start differs", i)
+		assert.Equal(t, wantDef[i].End, got[i].End, "match %d end differs", i)
+		assert.Equal(t, wantDef[i].Redacted, got[i].Redacted, "match %d redacted differs", i)
 	}
 }
 
@@ -142,38 +135,26 @@ func TestScanDefiniteMatchesScanDefiniteSubset(t *testing.T) {
 func TestDefiniteRulesVersionDistinctFromFull(t *testing.T) {
 	def := DefiniteRulesVersion()
 	full := RulesVersion()
-	if def == full {
-		t.Fatalf("DefiniteRulesVersion must differ from RulesVersion (both %q)", def)
-	}
-	if def == "" || full == "" {
-		t.Fatal("versions must be non-empty")
-	}
-	if def != DefiniteRulesVersion() {
-		t.Error("DefiniteRulesVersion not stable across calls")
-	}
-	if len(def) != 64 {
-		t.Errorf("DefiniteRulesVersion length = %d, want 64 hex chars: %q", len(def), def)
-	}
+	require.NotEqual(t, full, def,
+		"DefiniteRulesVersion must differ from RulesVersion (both %q)", def)
+	require.NotEmpty(t, def, "versions must be non-empty")
+	require.NotEmpty(t, full, "versions must be non-empty")
+	assert.Equal(t, def, DefiniteRulesVersion(), "DefiniteRulesVersion not stable across calls")
+	assert.Len(t, def, 64, "DefiniteRulesVersion length: %q", def)
 	for _, c := range def {
-		if !isLowerHex(c) {
-			t.Fatalf("DefiniteRulesVersion has non-hex char %q in %q", c, def)
-		}
+		require.True(t, isLowerHex(c),
+			"DefiniteRulesVersion has non-hex char %q in %q", c, def)
 	}
 }
 
 func TestRulesVersionStableAndHex(t *testing.T) {
 	v1 := RulesVersion()
 	v2 := RulesVersion()
-	if v1 != v2 {
-		t.Fatalf("RulesVersion not stable: %q != %q", v1, v2)
-	}
-	if len(v1) != 64 { // sha256 hex
-		t.Fatalf("RulesVersion length = %d, want 64 hex chars: %q", len(v1), v1)
-	}
+	require.Equal(t, v1, v2, "RulesVersion not stable")
+	require.Len(t, v1, 64, "RulesVersion length: %q", v1) // sha256 hex
 	for _, c := range v1 {
-		if !isLowerHex(c) {
-			t.Fatalf("RulesVersion has non-hex char %q in %q", c, v1)
-		}
+		require.True(t, isLowerHex(c),
+			"RulesVersion has non-hex char %q in %q", c, v1)
 	}
 }
 
@@ -182,26 +163,21 @@ func TestVerify(t *testing.T) {
 	awsSrc := "export KEY=AKIA7QHWN2DKR4FYPLJM done"
 	s := strings.Index(awsSrc, "AKIA")
 	e := s + len("AKIA7QHWN2DKR4FYPLJM")
-	if !Verify("aws-access-key", awsSrc, s, e) {
-		t.Error("Verify should accept a valid AWS key at its coordinates")
-	}
-	if Verify("aws-access-key", awsSrc, 0, 6) {
-		t.Error("Verify should reject coordinates that are not the key")
-	}
-	if Verify("nonexistent-rule", awsSrc, s, e) {
-		t.Error("Verify should reject an unknown rule")
-	}
-	if Verify("aws-access-key", awsSrc, s, len(awsSrc)+10) {
-		t.Error("Verify should reject out-of-bounds coordinates")
-	}
+	assert.True(t, Verify("aws-access-key", awsSrc, s, e),
+		"Verify should accept a valid AWS key at its coordinates")
+	assert.False(t, Verify("aws-access-key", awsSrc, 0, 6),
+		"Verify should reject coordinates that are not the key")
+	assert.False(t, Verify("nonexistent-rule", awsSrc, s, e),
+		"Verify should reject an unknown rule")
+	assert.False(t, Verify("aws-access-key", awsSrc, s, len(awsSrc)+10),
+		"Verify should reject out-of-bounds coordinates")
 	// Grouped rule: the stored span is the captured group (the password),
 	// not the full URL match. Verify must still accept it.
 	urlSrc := "db=postgres://user:s3cretP4ss@host:5432/db"
 	ps := strings.Index(urlSrc, "s3cretP4ss")
 	pe := ps + len("s3cretP4ss")
-	if !Verify("basic-auth-url", urlSrc, ps, pe) {
-		t.Error("Verify should accept a grouped finding at its group coordinates")
-	}
+	assert.True(t, Verify("basic-auth-url", urlSrc, ps, pe),
+		"Verify should accept a grouped finding at its group coordinates")
 }
 
 // TestVerifyDetectsChangedSource locks in the core --reveal guarantee: a scan
@@ -211,19 +187,15 @@ func TestVerifyDetectsChangedSource(t *testing.T) {
 	source := "export AWS=AKIA7QHWN2DKR4FYPLJM"
 	// Seed from canonical Scan (what produces findings and what Verify uses).
 	matches := Scan(source)
-	if len(matches) == 0 {
-		t.Fatal("expected at least one match in source")
-	}
+	require.NotEmpty(t, matches, "expected at least one match in source")
 	m := matches[0]
-	if !Verify(m.Rule, source, m.Start, m.End) {
-		t.Errorf("Verify should accept unchanged source at [%d,%d)", m.Start, m.End)
-	}
+	assert.True(t, Verify(m.Rule, source, m.Start, m.End),
+		"Verify should accept unchanged source at [%d,%d)", m.Start, m.End)
 	// Same length, but the secret at [Start,End) is replaced by a zero-entropy
 	// run that matches no rule, so Verify must reject the stale coordinates.
 	changed := source[:m.Start] + strings.Repeat("X", m.End-m.Start)
-	if Verify(m.Rule, changed, m.Start, m.End) {
-		t.Error("Verify should reject when the source changed at those coords")
-	}
+	assert.False(t, Verify(m.Rule, changed, m.Start, m.End),
+		"Verify should reject when the source changed at those coords")
 }
 
 // TestVerifyRejectsSuppressedCandidate ensures Verify mirrors canonical Scan,
@@ -238,12 +210,10 @@ func TestVerifyRejectsSuppressedCandidate(t *testing.T) {
 			break
 		}
 	}
-	if cand.Rule == "" {
-		t.Fatal("precondition: scanRaw should report a basic-auth-url candidate")
-	}
-	if Verify("basic-auth-url", src, cand.Start, cand.End) {
-		t.Error("Verify must reject a candidate that canonical Scan suppresses")
-	}
+	require.NotEmpty(t, cand.Rule,
+		"precondition: scanRaw should report a basic-auth-url candidate")
+	assert.False(t, Verify("basic-auth-url", src, cand.Start, cand.End),
+		"Verify must reject a candidate that canonical Scan suppresses")
 }
 
 // isLowerHex reports whether c is a lowercase hexadecimal digit, the alphabet
@@ -282,9 +252,7 @@ func TestHasRepeatingBlock(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := hasRepeatingBlock(c.s); got != c.want {
-				t.Errorf("hasRepeatingBlock(%q) = %v, want %v", c.s, got, c.want)
-			}
+			assert.Equal(t, c.want, hasRepeatingBlock(c.s))
 		})
 	}
 }
@@ -311,9 +279,7 @@ func TestHasMonotoneRun(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := hasMonotoneRun(c.s, 6); got != c.want {
-				t.Errorf("hasMonotoneRun(%q, 6) = %v, want %v", c.s, got, c.want)
-			}
+			assert.Equal(t, c.want, hasMonotoneRun(c.s, 6))
 		})
 	}
 }

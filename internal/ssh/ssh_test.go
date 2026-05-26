@@ -3,7 +3,7 @@ package ssh
 import (
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestBuildSSHArgs(t *testing.T) {
@@ -85,9 +85,7 @@ func TestBuildSSHArgs(t *testing.T) {
 				tt.host, tt.user, tt.port,
 				tt.sshOpts, tt.cmd,
 			)
-			if diff := cmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("mismatch (-want +got):\n%s", diff)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

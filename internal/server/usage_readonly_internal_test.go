@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -71,12 +73,8 @@ func TestUsageHandlers_ReturnNotImplementedOnReadOnlyStore(
 			)
 			w := httptest.NewRecorder()
 			tc.handler(w, req)
-			if w.Code != http.StatusNotImplemented {
-				t.Errorf(
-					"status = %d, want 501; body=%s",
-					w.Code, w.Body.String(),
-				)
-			}
+			assert.Equal(t, http.StatusNotImplemented, w.Code,
+				"body=%s", w.Body.String())
 		})
 	}
 }

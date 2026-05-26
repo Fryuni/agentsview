@@ -3,6 +3,8 @@ package secrets
 import (
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // TestRejectsAWSDocsPlaceholders pins the new aws-access-key validator: every
@@ -26,10 +28,9 @@ func TestRejectsAWSDocsPlaceholders(t *testing.T) {
 		t.Run(p, func(t *testing.T) {
 			text := "key=" + p + " end"
 			for _, m := range Scan(text) {
-				if m.Rule == "aws-access-key" {
-					t.Errorf("aws-access-key matched placeholder %q (mask=%q)",
-						p, m.Redacted)
-				}
+				assert.NotEqual(t, "aws-access-key", m.Rule,
+					"aws-access-key matched placeholder %q (mask=%q)",
+					p, m.Redacted)
 			}
 		})
 	}
@@ -54,9 +55,7 @@ func TestAcceptsRealAWSKeys(t *testing.T) {
 					found = true
 				}
 			}
-			if !found {
-				t.Errorf("aws-access-key did not match real-looking key %q", k)
-			}
+			assert.True(t, found, "aws-access-key did not match real-looking key %q", k)
 		})
 	}
 }
@@ -77,10 +76,9 @@ func TestRejectsAnthropicPlaceholders(t *testing.T) {
 		t.Run(p, func(t *testing.T) {
 			text := "TOKEN=" + p + " end"
 			for _, m := range Scan(text) {
-				if m.Rule == "anthropic-key" {
-					t.Errorf("anthropic-key matched placeholder %q (mask=%q)",
-						p, m.Redacted)
-				}
+				assert.NotEqual(t, "anthropic-key", m.Rule,
+					"anthropic-key matched placeholder %q (mask=%q)",
+					p, m.Redacted)
 			}
 		})
 	}
@@ -104,9 +102,7 @@ func TestAcceptsRealAnthropicKeys(t *testing.T) {
 					found = true
 				}
 			}
-			if !found {
-				t.Errorf("anthropic-key did not match real-looking key %q", k)
-			}
+			assert.True(t, found, "anthropic-key did not match real-looking key %q", k)
 		})
 	}
 }
@@ -126,10 +122,9 @@ func TestRejectsSlackPlaceholders(t *testing.T) {
 		t.Run(p, func(t *testing.T) {
 			text := "TOKEN=" + p + " end"
 			for _, m := range Scan(text) {
-				if m.Rule == "slack-token" {
-					t.Errorf("slack-token matched placeholder %q (mask=%q)",
-						p, m.Redacted)
-				}
+				assert.NotEqual(t, "slack-token", m.Rule,
+					"slack-token matched placeholder %q (mask=%q)",
+					p, m.Redacted)
 			}
 		})
 	}
@@ -152,9 +147,7 @@ func TestAcceptsRealSlackTokens(t *testing.T) {
 					found = true
 				}
 			}
-			if !found {
-				t.Errorf("slack-token did not match real-looking token %q", k)
-			}
+			assert.True(t, found, "slack-token did not match real-looking token %q", k)
 		})
 	}
 }
@@ -173,9 +166,8 @@ func TestRejectsTrivialPEMBodies(t *testing.T) {
 	for _, p := range cases {
 		t.Run(p[:40], func(t *testing.T) {
 			for _, m := range Scan(p) {
-				if m.Rule == "private-key-block" {
-					t.Errorf("private-key-block matched trivial body %q", p)
-				}
+				assert.NotEqual(t, "private-key-block", m.Rule,
+					"private-key-block matched trivial body %q", p)
 			}
 		})
 	}
@@ -199,9 +191,7 @@ func TestAcceptsRealisticPEMBodies(t *testing.T) {
 					found = true
 				}
 			}
-			if !found {
-				t.Errorf("private-key-block did not match realistic PEM (%s)", header)
-			}
+			assert.True(t, found, "private-key-block did not match realistic PEM (%s)", header)
 		})
 	}
 }
@@ -224,9 +214,7 @@ func TestAcceptsPKCS8Ed25519PEM(t *testing.T) {
 			found = true
 		}
 	}
-	if !found {
-		t.Errorf("private-key-block did not match PKCS#8 Ed25519 PEM (64-byte body)")
-	}
+	assert.True(t, found, "private-key-block did not match PKCS#8 Ed25519 PEM (64-byte body)")
 }
 
 // TestAcceptsEncryptedPEMWithHeaders pins the header-skipping behavior:
@@ -250,10 +238,8 @@ func TestAcceptsEncryptedPEMWithHeaders(t *testing.T) {
 			found = true
 		}
 	}
-	if !found {
-		t.Errorf("private-key-block did not match encrypted PEM with " +
-			"Proc-Type/DEK-Info headers")
-	}
+	assert.True(t, found,
+		"private-key-block did not match encrypted PEM with Proc-Type/DEK-Info headers")
 }
 
 // TestAcceptsAWSKeysWithRepeatedChars pins the entropy-skip on short
@@ -280,9 +266,8 @@ func TestAcceptsAWSKeysWithRepeatedChars(t *testing.T) {
 					found = true
 				}
 			}
-			if !found {
-				t.Errorf("aws-access-key did not match low-entropy real-looking key %q", key)
-			}
+			assert.True(t, found,
+				"aws-access-key did not match low-entropy real-looking key %q", key)
 		})
 	}
 }
@@ -315,10 +300,9 @@ func TestFixtureDenyListSuppressesAgentsviewFixtures(t *testing.T) {
 	for _, f := range fixtures {
 		t.Run(f.name, func(t *testing.T) {
 			for _, m := range Scan(f.text) {
-				if m.Confidence == ConfidenceDefinite {
-					t.Errorf("deny-list let through fixture %q: rule=%s mask=%s",
-						f.text, m.Rule, m.Redacted)
-				}
+				assert.NotEqual(t, ConfidenceDefinite, m.Confidence,
+					"deny-list let through fixture %q: rule=%s mask=%s",
+					f.text, m.Rule, m.Redacted)
 			}
 		})
 	}
@@ -335,9 +319,8 @@ func TestFixtureDenyListExcludesTranscriptOnlyLeakHashes(t *testing.T) {
 		"df26a79256a73d9b7c014e9ea73372498e70a6072d22c0386ed3c6edea9817ac",
 	}
 	for _, h := range transcriptOnlyLeakHashes {
-		if _, ok := agentsviewTestFixtureHashes[h]; ok {
-			t.Fatalf("transcript-only leak hash %s must not be fixture-denied", h)
-		}
+		_, ok := agentsviewTestFixtureHashes[h]
+		assert.False(t, ok, "transcript-only leak hash %s must not be fixture-denied", h)
 	}
 }
 
@@ -352,9 +335,7 @@ func TestFixtureDenyListOffByDefault(t *testing.T) {
 			found = true
 		}
 	}
-	if !found {
-		t.Errorf("default behavior should allow fixture matches; got %+v", matches)
-	}
+	assert.True(t, found, "default behavior should allow fixture matches; got %+v", matches)
 }
 
 // TestRejectsPEMDocsPlaceholders pins the tighter base64-purity gate
@@ -377,9 +358,8 @@ func TestRejectsPEMDocsPlaceholders(t *testing.T) {
 	for i, p := range cases {
 		t.Run(p[:40]+"#"+itoa(i), func(t *testing.T) {
 			for _, m := range Scan(p) {
-				if m.Rule == "private-key-block" {
-					t.Errorf("private-key-block matched docs placeholder: %q", m.Redacted)
-				}
+				assert.NotEqual(t, "private-key-block", m.Rule,
+					"private-key-block matched docs placeholder: %q", m.Redacted)
 			}
 		})
 	}
@@ -406,9 +386,8 @@ func TestRejectsPEMInMarkdownDiff(t *testing.T) {
 	text := "-----BEGIN PRIVATE KEY-----\n" + body +
 		"-----END PRIVATE KEY-----"
 	for _, m := range Scan(text) {
-		if m.Rule == "private-key-block" {
-			t.Errorf("private-key-block matched markdown diff: %q", m.Redacted)
-		}
+		assert.NotEqual(t, "private-key-block", m.Rule,
+			"private-key-block matched markdown diff: %q", m.Redacted)
 	}
 }
 

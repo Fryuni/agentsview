@@ -126,6 +126,13 @@ container (see `.github/workflows/ci.yml`, `integration` job).
 ### Test Guidelines
 
 - Table-driven tests for Go code
+- **Use `testify` (`require` + `assert`) for assertions in Go tests.** Reach for
+  `require.X` when a failed check should stop the test (setup errors, nil
+  receivers, length mismatches before indexing) and `assert.X` for independent
+  checks that should keep running. Don't hand-roll
+  `if got != want { t.Fatalf(...) }` in new tests. Custom domain helpers (e.g.
+  `assertSessionMeta`) are fine, but they should be built on top of testify, not
+  stdlib comparisons.
 - Use `testDB(t)` helper for database tests
 - Frontend: colocated `*.test.ts` files, Playwright specs in `frontend/e2e/`
 - All tests use `t.TempDir()` for temp directories

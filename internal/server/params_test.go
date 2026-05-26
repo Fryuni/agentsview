@@ -3,6 +3,8 @@ package server
 import (
 	"net/http"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestParseIntParam(t *testing.T) {
@@ -61,17 +63,9 @@ func TestParseIntParam(t *testing.T) {
 			w, r := newTestRequest(t, tt.query)
 
 			val, ok := parseIntParam(w, r, tt.param)
-			if ok != tt.wantOK {
-				t.Errorf("ok = %v, want %v", ok, tt.wantOK)
-			}
-			if val != tt.wantVal {
-				t.Errorf("val = %d, want %d", val, tt.wantVal)
-			}
-			if w.Code != tt.wantStatus {
-				t.Errorf(
-					"status = %d, want %d", w.Code, tt.wantStatus,
-				)
-			}
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.wantVal, val)
+			assert.Equal(t, tt.wantStatus, w.Code)
 		})
 	}
 }
@@ -127,15 +121,9 @@ func TestParseNonNegativeIntParam(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			w, r := newTestRequest(t, tt.query)
 			val, ok := parseNonNegativeIntParam(w, r, "cursor")
-			if ok != tt.wantOK {
-				t.Errorf("ok = %v, want %v", ok, tt.wantOK)
-			}
-			if val != tt.wantVal {
-				t.Errorf("val = %d, want %d", val, tt.wantVal)
-			}
-			if w.Code != tt.wantStatus {
-				t.Errorf("status = %d, want %d", w.Code, tt.wantStatus)
-			}
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.wantVal, val)
+			assert.Equal(t, tt.wantStatus, w.Code)
 		})
 	}
 }
@@ -158,11 +146,7 @@ func TestClampLimit(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := clampLimit(tt.limit, defaultLimit, max)
-			if got != tt.want {
-				t.Errorf("clampLimit(%d, %d, %d) = %d, want %d",
-					tt.limit, defaultLimit, max, got, tt.want)
-			}
+			assert.Equal(t, tt.want, clampLimit(tt.limit, defaultLimit, max))
 		})
 	}
 }

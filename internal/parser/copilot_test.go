@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // writeCopilotJSONL writes JSONL lines to a temp file and
@@ -16,11 +19,9 @@ func writeCopilotJSONL(
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test-session.jsonl")
 	content := strings.Join(lines, "\n") + "\n"
-	if err := os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		path, []byte(content), 0o644,
-	); err != nil {
-		t.Fatal(err)
-	}
+	))
 	return path
 }
 
@@ -28,23 +29,15 @@ func writeCopilotJSONL(
 func parseAndValidateHelper(t *testing.T, path string, machine string, wantMsgs int) (*ParsedSession, []ParsedMessage) {
 	t.Helper()
 	sess, msgs, err := ParseCopilotSession(path, machine)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if sess == nil {
-		t.Fatal("expected non-nil session")
-	}
-	if len(msgs) != wantMsgs {
-		t.Fatalf("got %d messages, want %d", len(msgs), wantMsgs)
-	}
+	require.NoError(t, err)
+	require.NotNil(t, sess, "expected non-nil session")
+	require.Len(t, msgs, wantMsgs)
 	return sess, msgs
 }
 
 func assertEqual[T comparable](t *testing.T, want, got T, name string) {
 	t.Helper()
-	if want != got {
-		t.Errorf("%s = %v, want %v", name, got, want)
-	}
+	assert.Equal(t, want, got, name)
 }
 
 func TestParseCopilotSession_Basic(t *testing.T) {
@@ -81,9 +74,7 @@ func TestParseCopilotSession_ToolCalls(t *testing.T) {
 
 	// Check tool call message.
 	tcMsg := msgs[1]
-	if !tcMsg.HasToolUse {
-		t.Error("expected HasToolUse on tool call message")
-	}
+	assert.True(t, tcMsg.HasToolUse, "expected HasToolUse on tool call message")
 	assertToolCalls(t, tcMsg.ToolCalls, []ParsedToolCall{{
 		ToolName:  "view",
 		Category:  "Read",
@@ -141,21 +132,13 @@ func TestParseCopilotSession_Reasoning(t *testing.T) {
 	_, msgs := parseAndValidateHelper(t, path, "m", 2)
 
 	ast := msgs[1]
-	if !ast.HasThinking {
-		t.Error("expected HasThinking on assistant message with reasoningText")
-	}
-	if !strings.Contains(ast.Content, "[Thinking]\nLet me think about this carefully...\n[/Thinking]") {
-		t.Errorf("expected thinking block in content, got: %q", ast.Content)
-	}
-	if !strings.Contains(ast.Content, "Here is my analysis.") {
-		t.Errorf("expected visible content after thinking block, got: %q", ast.Content)
-	}
+	assert.True(t, ast.HasThinking, "expected HasThinking on assistant message with reasoningText")
+	assert.Contains(t, ast.Content, "[Thinking]\nLet me think about this carefully...\n[/Thinking]")
+	assert.Contains(t, ast.Content, "Here is my analysis.")
 	// Thinking block must precede the visible content.
 	thinkIdx := strings.Index(ast.Content, "[Thinking]")
 	visibleIdx := strings.Index(ast.Content, "Here is my analysis.")
-	if thinkIdx >= visibleIdx {
-		t.Errorf("thinking block should appear before visible content")
-	}
+	assert.Less(t, thinkIdx, visibleIdx, "thinking block should appear before visible content")
 }
 
 func TestParseCopilotSession_ReasoningOnly(t *testing.T) {
@@ -170,12 +153,8 @@ func TestParseCopilotSession_ReasoningOnly(t *testing.T) {
 	_, msgs := parseAndValidateHelper(t, path, "m", 2)
 
 	ast := msgs[1]
-	if !ast.HasThinking {
-		t.Error("expected HasThinking")
-	}
-	if !strings.Contains(ast.Content, "[Thinking]\nPondering the question...\n[/Thinking]") {
-		t.Errorf("expected thinking block in content, got: %q", ast.Content)
-	}
+	assert.True(t, ast.HasThinking, "expected HasThinking")
+	assert.Contains(t, ast.Content, "[Thinking]\nPondering the question...\n[/Thinking]")
 }
 
 func TestParseCopilotSession_AssistantReasoningEvent(t *testing.T) {
@@ -187,17 +166,13 @@ func TestParseCopilotSession_AssistantReasoningEvent(t *testing.T) {
 	)
 
 	_, msgs := parseAndValidateHelper(t, path, "m", 2)
-	if !msgs[1].HasThinking {
-		t.Error("expected HasThinking set by assistant.reasoning event")
-	}
+	assert.True(t, msgs[1].HasThinking, "expected HasThinking set by assistant.reasoning event")
 }
 
 func TestParseCopilotSession_DirectoryFormat(t *testing.T) {
 	dir := t.TempDir()
 	sessDir := filepath.Join(dir, "abc-456")
-	if err := os.MkdirAll(sessDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(sessDir, 0o755))
 
 	content := strings.Join([]string{
 		`{"type":"session.start","data":{"sessionId":"abc-456"},"timestamp":"2025-01-15T10:00:00Z"}`,
@@ -206,11 +181,9 @@ func TestParseCopilotSession_DirectoryFormat(t *testing.T) {
 	}, "\n") + "\n"
 
 	path := filepath.Join(sessDir, "events.jsonl")
-	if err := os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		path, []byte(content), 0o644,
-	); err != nil {
-		t.Fatal(err)
-	}
+	))
 
 	sess, _ := parseAndValidateHelper(t, path, "m", 2)
 	assertEqual(t, "copilot:abc-456", sess.ID, "session ID")
@@ -230,24 +203,18 @@ func writeDirSession(
 	t.Helper()
 	dir := t.TempDir()
 	sessDir := filepath.Join(dir, sessID)
-	if err := os.MkdirAll(sessDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(sessDir, 0o755))
 	eventsPath := filepath.Join(sessDir, "events.jsonl")
-	if err := os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		eventsPath,
 		[]byte(strings.Join(events, "\n")+"\n"),
 		0o644,
-	); err != nil {
-		t.Fatal(err)
-	}
+	))
 	if workspaceYAML != "" {
 		yamlPath := filepath.Join(sessDir, "workspace.yaml")
-		if err := os.WriteFile(
+		require.NoError(t, os.WriteFile(
 			yamlPath, []byte(workspaceYAML), 0o644,
-		); err != nil {
-			t.Fatal(err)
-		}
+		))
 	}
 	return eventsPath
 }
@@ -353,20 +320,14 @@ func TestParseCopilotSession_WorkspaceNameTruncated(t *testing.T) {
 	sess, _ := parseAndValidateHelper(t, path, "m", 2)
 
 	// truncate(s, 300) returns at most 303 bytes (300 runes + "...").
-	if len(sess.FirstMessage) > 303 {
-		t.Errorf("FirstMessage not truncated: len=%d", len(sess.FirstMessage))
-	}
-	if len(sess.FirstMessage) == len(longName) {
-		t.Error("FirstMessage was not truncated at all")
-	}
+	assert.LessOrEqual(t, len(sess.FirstMessage), 303, "FirstMessage not truncated")
+	assert.NotEqual(t, len(longName), len(sess.FirstMessage), "FirstMessage was not truncated at all")
 }
 
 func TestParseCopilotSession_DirectoryFormatFallbackID(t *testing.T) {
 	dir := t.TempDir()
 	sessDir := filepath.Join(dir, "def-789")
-	if err := os.MkdirAll(sessDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(sessDir, 0o755))
 
 	// No session.start event, so ID comes from dir name.
 	content := strings.Join([]string{
@@ -375,11 +336,9 @@ func TestParseCopilotSession_DirectoryFormatFallbackID(t *testing.T) {
 	}, "\n") + "\n"
 
 	path := filepath.Join(sessDir, "events.jsonl")
-	if err := os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		path, []byte(content), 0o644,
-	); err != nil {
-		t.Fatal(err)
-	}
+	))
 
 	sess, _ := parseAndValidateHelper(t, path, "m", 2)
 	assertEqual(t, "copilot:def-789", sess.ID, "session ID")
@@ -391,30 +350,18 @@ func TestParseCopilotSession_EmptySession(t *testing.T) {
 	)
 
 	sess, msgs, err := ParseCopilotSession(path, "m")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if sess != nil {
-		t.Errorf("expected nil session for empty, got %+v", sess)
-	}
-	if msgs != nil {
-		t.Errorf("expected nil messages for empty, got %d", len(msgs))
-	}
+	require.NoError(t, err)
+	assert.Nil(t, sess, "expected nil session for empty")
+	assert.Nil(t, msgs, "expected nil messages for empty")
 }
 
 func TestParseCopilotSession_NonexistentFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nonexistent.jsonl")
 
 	sess, msgs, err := ParseCopilotSession(path, "m")
-	if err != nil {
-		t.Fatalf("expected nil error, got %v", err)
-	}
-	if sess != nil {
-		t.Error("expected nil session for nonexistent file")
-	}
-	if msgs != nil {
-		t.Error("expected nil messages for nonexistent file")
-	}
+	require.NoError(t, err, "expected nil error")
+	assert.Nil(t, sess, "expected nil session for nonexistent file")
+	assert.Nil(t, msgs, "expected nil messages for nonexistent file")
 }
 
 func TestParseCopilotSession_ObjectArguments(t *testing.T) {

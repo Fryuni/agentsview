@@ -8,50 +8,33 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestWriteAndRemoveStateFile(t *testing.T) {
 	dir := t.TempDir()
 
 	path, err := WriteStateFile(dir, "127.0.0.1", 8080, "1.0.0", false)
-	if err != nil {
-		t.Fatalf("WriteStateFile: %v", err)
-	}
+	require.NoError(t, err)
 
-	want := filepath.Join(dir, "server.8080.json")
-	if path != want {
-		t.Errorf("path = %q, want %q", path, want)
-	}
+	assert.Equal(t, filepath.Join(dir, "server.8080.json"), path)
 
 	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading state file: %v", err)
-	}
+	require.NoError(t, err)
 
 	var sf StateFile
-	if err := json.Unmarshal(data, &sf); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if sf.Port != 8080 {
-		t.Errorf("port = %d, want 8080", sf.Port)
-	}
-	if sf.Host != "127.0.0.1" {
-		t.Errorf("host = %q, want 127.0.0.1", sf.Host)
-	}
-	if sf.Version != "1.0.0" {
-		t.Errorf("version = %q, want 1.0.0", sf.Version)
-	}
-	if sf.PID != os.Getpid() {
-		t.Errorf("pid = %d, want %d", sf.PID, os.Getpid())
-	}
-	if sf.StartedAt == "" {
-		t.Error("started_at is empty")
-	}
+	require.NoError(t, json.Unmarshal(data, &sf))
+	assert.Equal(t, 8080, sf.Port)
+	assert.Equal(t, "127.0.0.1", sf.Host)
+	assert.Equal(t, "1.0.0", sf.Version)
+	assert.Equal(t, os.Getpid(), sf.PID)
+	assert.NotEmpty(t, sf.StartedAt)
 
 	RemoveStateFile(dir, 8080)
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Error("state file not removed")
-	}
+	_, statErr := os.Stat(path)
+	assert.True(t, os.IsNotExist(statErr), "state file not removed")
 }
 
 // TestWriteStateFile_UsesProcessStartTime verifies that
@@ -69,23 +52,15 @@ func TestWriteStateFile_UsesProcessStartTime(t *testing.T) {
 	path, err := WriteStateFile(
 		dir, "127.0.0.1", 7777, "1.0.0", false,
 	)
-	if err != nil {
-		t.Fatalf("WriteStateFile: %v", err)
-	}
+	require.NoError(t, err)
 
 	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading state file: %v", err)
-	}
+	require.NoError(t, err)
 	var sf StateFile
-	if err := json.Unmarshal(data, &sf); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	require.NoError(t, json.Unmarshal(data, &sf))
 
 	started, err := time.Parse(time.RFC3339, sf.StartedAt)
-	if err != nil {
-		t.Fatalf("parsing StartedAt: %v", err)
-	}
+	require.NoError(t, err)
 
 	// StartedAt should match the process start time, not
 	// time.Now(). With RFC3339Nano precision there is no
@@ -101,37 +76,20 @@ func TestWriteStateFile_UsesProcessStartTime(t *testing.T) {
 	if diffFromNow < 0 {
 		diffFromNow = -diffFromNow
 	}
-	if diffFromStart > time.Millisecond {
-		t.Errorf(
-			"StartedAt = %v, want ≈ process start %v "+
-				"(diff %v)",
-			started, procStart, diffFromStart,
-		)
-	}
-	if diffFromNow < diffFromStart {
-		t.Errorf(
-			"StartedAt %v is closer to Now %v than "+
-				"to process start %v; likely using "+
-				"time.Now() instead of process "+
-				"start time",
-			started, now, procStart,
-		)
-	}
+	assert.LessOrEqual(t, diffFromStart, time.Millisecond,
+		"StartedAt = %v, want ≈ process start %v", started, procStart)
+	assert.GreaterOrEqual(t, diffFromNow, diffFromStart,
+		"StartedAt %v is closer to Now %v than to process start %v",
+		started, now, procStart)
 
 	// The state file must pass hasLiveStateFile validation.
-	if !IsServerActive(dir) {
-		t.Error(
-			"state file written by WriteStateFile " +
-				"failed IsServerActive",
-		)
-	}
+	assert.True(t, IsServerActive(dir),
+		"state file written by WriteStateFile failed IsServerActive")
 }
 
 func TestFindRunningServer_NoFiles(t *testing.T) {
 	dir := t.TempDir()
-	if sf := FindRunningServer(dir); sf != nil {
-		t.Errorf("expected nil, got %+v", sf)
-	}
+	assert.Nil(t, FindRunningServer(dir))
 }
 
 func TestFindRunningServer_StaleFile(t *testing.T) {
@@ -149,15 +107,11 @@ func TestFindRunningServer_StaleFile(t *testing.T) {
 	path := filepath.Join(dir, "server.9999.json")
 	os.WriteFile(path, data, 0o644)
 
-	result := FindRunningServer(dir)
-	if result != nil {
-		t.Errorf("expected nil for stale PID, got %+v", result)
-	}
+	assert.Nil(t, FindRunningServer(dir), "expected nil for stale PID")
 
 	// Stale file should be cleaned up.
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Error("stale state file not cleaned up")
-	}
+	_, statErr := os.Stat(path)
+	assert.True(t, os.IsNotExist(statErr), "stale state file not cleaned up")
 }
 
 func TestFindRunningServer_InvalidJSON(t *testing.T) {
@@ -165,10 +119,7 @@ func TestFindRunningServer_InvalidJSON(t *testing.T) {
 	path := filepath.Join(dir, "server.8080.json")
 	os.WriteFile(path, []byte("not json"), 0o644)
 
-	result := FindRunningServer(dir)
-	if result != nil {
-		t.Errorf("expected nil for invalid JSON, got %+v", result)
-	}
+	assert.Nil(t, FindRunningServer(dir), "expected nil for invalid JSON")
 }
 
 func TestFindRunningServer_IgnoresNonStateFiles(t *testing.T) {
@@ -182,10 +133,7 @@ func TestFindRunningServer_IgnoresNonStateFiles(t *testing.T) {
 		[]byte("nope"), 0o644,
 	)
 
-	result := FindRunningServer(dir)
-	if result != nil {
-		t.Errorf("expected nil, got %+v", result)
-	}
+	assert.Nil(t, FindRunningServer(dir))
 }
 
 func TestFindRunningServer_LiveProcess(t *testing.T) {
@@ -193,9 +141,7 @@ func TestFindRunningServer_LiveProcess(t *testing.T) {
 
 	// Start a real TCP listener so the port probe succeeds.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
+	require.NoError(t, err)
 	defer ln.Close()
 
 	port := ln.Addr().(*net.TCPAddr).Port
@@ -211,32 +157,19 @@ func TestFindRunningServer_LiveProcess(t *testing.T) {
 	path := filepath.Join(
 		dir, fmt.Sprintf("server.%d.json", port),
 	)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatalf("write state file: %v", err)
-	}
+	require.NoError(t, os.WriteFile(path, data, 0o644))
 
 	result := FindRunningServer(dir)
-	if result == nil {
-		t.Fatal("expected running server, got nil")
-		return
-	}
-	if result.Port != port {
-		t.Errorf("port = %d, want %d", result.Port, port)
-	}
-	if result.PID != os.Getpid() {
-		t.Errorf(
-			"pid = %d, want %d", result.PID, os.Getpid(),
-		)
-	}
+	require.NotNil(t, result, "expected running server")
+	assert.Equal(t, port, result.Port)
+	assert.Equal(t, os.Getpid(), result.PID)
 }
 
 func TestFindRunningServer_BindAll(t *testing.T) {
 	dir := t.TempDir()
 
 	ln, err := net.Listen("tcp", "0.0.0.0:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
+	require.NoError(t, err)
 	defer ln.Close()
 
 	port := ln.Addr().(*net.TCPAddr).Port
@@ -252,20 +185,11 @@ func TestFindRunningServer_BindAll(t *testing.T) {
 	path := filepath.Join(
 		dir, fmt.Sprintf("server.%d.json", port),
 	)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatalf("write state file: %v", err)
-	}
+	require.NoError(t, os.WriteFile(path, data, 0o644))
 
 	result := FindRunningServer(dir)
-	if result == nil {
-		t.Fatal(
-			"expected running server for 0.0.0.0 host, got nil",
-		)
-		return
-	}
-	if result.Port != port {
-		t.Errorf("port = %d, want %d", result.Port, port)
-	}
+	require.NotNil(t, result, "expected running server for 0.0.0.0 host")
+	assert.Equal(t, port, result.Port)
 }
 
 // recentStartedAt returns a StartedAt timestamp that passes
@@ -304,19 +228,14 @@ func TestIsServerActive_LivePIDNoPort(t *testing.T) {
 	os.WriteFile(path, data, 0o644)
 
 	// FindRunningServer should return nil (no TCP).
-	if FindRunningServer(dir) != nil {
-		t.Error("expected FindRunningServer nil (no listener)")
-	}
+	assert.Nil(t, FindRunningServer(dir), "expected FindRunningServer nil (no listener)")
 
 	// But IsServerActive should return true (live PID).
-	if !IsServerActive(dir) {
-		t.Error("expected IsServerActive true for live PID")
-	}
+	assert.True(t, IsServerActive(dir), "expected IsServerActive true for live PID")
 
 	// State file should NOT be deleted.
-	if _, err := os.Stat(path); err != nil {
-		t.Error("state file was deleted despite live PID")
-	}
+	_, statErr := os.Stat(path)
+	assert.NoError(t, statErr, "state file was deleted despite live PID")
 }
 
 // TestIsServerActive_LivePIDNoPort_NoStartupLock verifies
@@ -342,15 +261,9 @@ func TestIsServerActive_LivePIDNoPort_NoStartupLock(
 		filepath.Join(dir, "server.59998.json"), data, 0o644,
 	)
 
-	if FindRunningServer(dir) != nil {
-		t.Error("expected FindRunningServer nil")
-	}
-	if !IsServerActive(dir) {
-		t.Error("expected IsServerActive true")
-	}
-	if IsStartupLocked(dir) {
-		t.Error("expected IsStartupLocked false")
-	}
+	assert.Nil(t, FindRunningServer(dir), "expected FindRunningServer nil")
+	assert.True(t, IsServerActive(dir), "expected IsServerActive true")
+	assert.False(t, IsStartupLocked(dir), "expected IsStartupLocked false")
 }
 
 // TestIsServerActive_LongRunningServer verifies that a
@@ -372,14 +285,11 @@ func TestIsServerActive_LongRunningServer(t *testing.T) {
 	path := filepath.Join(dir, "server.59997.json")
 	os.WriteFile(path, data, 0o644)
 
-	if !IsServerActive(dir) {
-		t.Error("expected IsServerActive true for old but live PID")
-	}
+	assert.True(t, IsServerActive(dir), "expected IsServerActive true for old but live PID")
 
 	// State file must NOT be deleted.
-	if _, err := os.Stat(path); err != nil {
-		t.Error("state file was deleted for long-running server")
-	}
+	_, statErr := os.Stat(path)
+	assert.NoError(t, statErr, "state file was deleted for long-running server")
 }
 
 // TestIsServerActive_PreBootStateFile verifies that a state
@@ -407,17 +317,12 @@ func TestIsServerActive_PreBootStateFile(t *testing.T) {
 	path := filepath.Join(dir, "server.59996.json")
 	os.WriteFile(path, data, 0o644)
 
-	if IsServerActive(dir) {
-		t.Error(
-			"expected false for pre-boot state file " +
-				"(PID reuse after reboot)",
-		)
-	}
+	assert.False(t, IsServerActive(dir),
+		"expected false for pre-boot state file (PID reuse after reboot)")
 
 	// Stale file should be cleaned up.
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Error("pre-boot state file was not cleaned up")
-	}
+	_, statErr := os.Stat(path)
+	assert.True(t, os.IsNotExist(statErr), "pre-boot state file was not cleaned up")
 }
 
 // TestIsServerActive_DeadPIDStateFile verifies that a state
@@ -437,14 +342,11 @@ func TestIsServerActive_DeadPIDStateFile(t *testing.T) {
 	path := filepath.Join(dir, "server.59994.json")
 	os.WriteFile(path, data, 0o644)
 
-	if IsServerActive(dir) {
-		t.Error("expected false for dead PID state file")
-	}
+	assert.False(t, IsServerActive(dir), "expected false for dead PID state file")
 
 	// Dead-PID state file should be cleaned up.
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Error("dead-PID state file not cleaned up")
-	}
+	_, statErr := os.Stat(path)
+	assert.True(t, os.IsNotExist(statErr), "dead-PID state file not cleaned up")
 }
 
 // TestIsServerActive_StartupLock verifies that IsServerActive
@@ -452,37 +354,25 @@ func TestIsServerActive_DeadPIDStateFile(t *testing.T) {
 func TestIsServerActive_StartupLock(t *testing.T) {
 	dir := t.TempDir()
 
-	if IsServerActive(dir) {
-		t.Fatal("expected false with no files")
-	}
+	require.False(t, IsServerActive(dir), "expected false with no files")
 
 	WriteStartupLock(dir)
-	if !IsServerActive(dir) {
-		t.Fatal("expected true with startup lock")
-	}
+	require.True(t, IsServerActive(dir), "expected true with startup lock")
 
 	RemoveStartupLock(dir)
-	if IsServerActive(dir) {
-		t.Fatal("expected false after lock removed")
-	}
+	require.False(t, IsServerActive(dir), "expected false after lock removed")
 }
 
 func TestStartupLock_OwnProcess(t *testing.T) {
 	dir := t.TempDir()
 
-	if isServerStarting(dir) {
-		t.Fatal("expected false before lock written")
-	}
+	require.False(t, isServerStarting(dir), "expected false before lock written")
 
 	WriteStartupLock(dir)
-	if !isServerStarting(dir) {
-		t.Fatal("expected true after lock written")
-	}
+	require.True(t, isServerStarting(dir), "expected true after lock written")
 
 	RemoveStartupLock(dir)
-	if isServerStarting(dir) {
-		t.Fatal("expected false after lock removed")
-	}
+	require.False(t, isServerStarting(dir), "expected false after lock removed")
 }
 
 func TestStartupLock_StalePID(t *testing.T) {
@@ -492,14 +382,11 @@ func TestStartupLock_StalePID(t *testing.T) {
 	path := filepath.Join(dir, startupLockFile(999999999))
 	os.WriteFile(path, []byte("999999999"), 0o644)
 
-	if isServerStarting(dir) {
-		t.Fatal("expected false for stale PID")
-	}
+	require.False(t, isServerStarting(dir), "expected false for stale PID")
 
 	// Stale lock should be cleaned up.
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Error("stale startup lock not cleaned up")
-	}
+	_, statErr := os.Stat(path)
+	assert.True(t, os.IsNotExist(statErr), "stale startup lock not cleaned up")
 }
 
 // TestStartupLock_MalformedContent verifies that a malformed
@@ -511,14 +398,11 @@ func TestStartupLock_MalformedContent(t *testing.T) {
 	path := filepath.Join(dir, startupLockPrefix+"bad")
 	os.WriteFile(path, []byte("not-a-pid"), 0o644)
 
-	if isServerStarting(dir) {
-		t.Fatal("expected false for malformed content")
-	}
+	require.False(t, isServerStarting(dir), "expected false for malformed content")
 
 	// File should NOT be deleted.
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		t.Error("malformed lock file was deleted")
-	}
+	_, statErr := os.Stat(path)
+	assert.False(t, os.IsNotExist(statErr), "malformed lock file was deleted")
 }
 
 // TestStartupLock_AtomicWrite verifies the lock file is written
@@ -530,49 +414,37 @@ func TestStartupLock_AtomicWrite(t *testing.T) {
 
 	path := filepath.Join(dir, startupLockFile(os.Getpid()))
 	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading lock: %v", err)
-	}
+	require.NoError(t, err)
 
-	want := fmt.Sprintf("%d", os.Getpid())
-	if string(data) != want {
-		t.Errorf("lock content = %q, want %q", data, want)
-	}
+	assert.Equal(t, fmt.Sprintf("%d", os.Getpid()), string(data))
 
 	// No temp file should remain.
 	tmpPath := path + ".tmp"
-	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
-		t.Error("temp file was not cleaned up")
-	}
+	_, tmpErr := os.Stat(tmpPath)
+	assert.True(t, os.IsNotExist(tmpErr), "temp file was not cleaned up")
 }
 
 func TestWaitForStartup_AlreadyRunning(t *testing.T) {
 	dir := t.TempDir()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
+	require.NoError(t, err)
 	defer ln.Close()
 
 	port := ln.Addr().(*net.TCPAddr).Port
 	WriteStateFile(dir, "127.0.0.1", port, "1.0.0", false)
 
 	// Should return immediately since server is running.
-	if !WaitForStartup(dir, 100*millisecondsForTest) {
-		t.Error("expected true, server is running")
-	}
+	assert.True(t, WaitForStartup(dir, 100*millisecondsForTest),
+		"expected true, server is running")
 }
 
 func TestWaitForStartup_LockClearsNoServer(t *testing.T) {
 	dir := t.TempDir()
 
 	// No lock, no server — should return false immediately.
-	if WaitForStartup(dir, 100*millisecondsForTest) {
-		t.Error(
-			"expected false, no lock and no server",
-		)
-	}
+	assert.False(t, WaitForStartup(dir, 100*millisecondsForTest),
+		"expected false, no lock and no server")
 }
 
 // millisecondsForTest is a scaling factor for test timeouts.
@@ -590,13 +462,8 @@ func TestProbeHostForDial(t *testing.T) {
 		{"192.168.1.100", "192.168.1.100"},
 	}
 	for _, tt := range tests {
-		got := probeHostForDial(tt.host)
-		if got != tt.want {
-			t.Errorf(
-				"probeHostForDial(%q) = %q, want %q",
-				tt.host, got, tt.want,
-			)
-		}
+		assert.Equal(t, tt.want, probeHostForDial(tt.host),
+			"probeHostForDial(%q)", tt.host)
 	}
 }
 
@@ -609,19 +476,12 @@ func TestProcessStartTime_OwnProcess(t *testing.T) {
 		t.Skipf("processStartTime not available: %v", err)
 	}
 	// Our process started before now.
-	if st.After(time.Now()) {
-		t.Errorf(
-			"process start time %v is in the future",
-			st,
-		)
-	}
+	assert.False(t, st.After(time.Now()),
+		"process start time %v is in the future", st)
 	// And after boot (if available).
 	if bt, btErr := systemBootTime(); btErr == nil {
-		if st.Before(bt) {
-			t.Errorf(
-				"start %v is before boot %v", st, bt,
-			)
-		}
+		assert.False(t, st.Before(bt),
+			"start %v is before boot %v", st, bt)
 	}
 }
 
@@ -673,19 +533,12 @@ func TestIsServerActive_SameBootPIDReuse(t *testing.T) {
 	path := filepath.Join(dir, "server.59995.json")
 	os.WriteFile(path, data, 0o644)
 
-	if IsServerActive(dir) {
-		t.Error(
-			"expected false for same-boot PID reuse",
-		)
-	}
+	assert.False(t, IsServerActive(dir), "expected false for same-boot PID reuse")
 
 	// Stale file should be cleaned up.
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Error(
-			"state file not cleaned up after " +
-				"PID reuse detection",
-		)
-	}
+	_, statErr := os.Stat(path)
+	assert.True(t, os.IsNotExist(statErr),
+		"state file not cleaned up after PID reuse detection")
 }
 
 // TestIsStaleByProcessStart_OwnPID verifies that
@@ -698,15 +551,13 @@ func TestIsStaleByProcessStart_OwnPID(t *testing.T) {
 	}
 
 	// Within tolerance — not stale.
-	if isStaleByProcessStart(os.Getpid(), procStart) {
-		t.Error("expected false for matching start time")
-	}
+	assert.False(t, isStaleByProcessStart(os.Getpid(), procStart),
+		"expected false for matching start time")
 
 	// Far off — stale.
 	fakeTime := procStart.Add(-1 * time.Hour)
-	if !isStaleByProcessStart(os.Getpid(), fakeTime) {
-		t.Error("expected true for mismatched start time")
-	}
+	assert.True(t, isStaleByProcessStart(os.Getpid(), fakeTime),
+		"expected true for mismatched start time")
 }
 
 // TestStateFile_ReadOnlyPersisted verifies that
@@ -720,28 +571,16 @@ func TestStateFile_ReadOnlyPersisted(t *testing.T) {
 	path, err := WriteStateFile(
 		dir, "127.0.0.1", 9876, "test", true,
 	)
-	if err != nil {
-		t.Fatalf("WriteStateFile: %v", err)
-	}
+	require.NoError(t, err)
 	defer RemoveStateFile(dir, 9876)
 
 	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading state file: %v", err)
-	}
+	require.NoError(t, err)
 	var sf StateFile
-	if err := json.Unmarshal(raw, &sf); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if !sf.ReadOnly {
-		t.Error("ReadOnly = false, want true")
-	}
-	if sf.Port != 9876 {
-		t.Errorf("port = %d, want 9876", sf.Port)
-	}
-	if sf.Version != "test" {
-		t.Errorf("version = %q, want test", sf.Version)
-	}
+	require.NoError(t, json.Unmarshal(raw, &sf))
+	assert.True(t, sf.ReadOnly)
+	assert.Equal(t, 9876, sf.Port)
+	assert.Equal(t, "test", sf.Version)
 }
 
 // TestStateFile_ReadOnlyDefaultsToFalse verifies that
@@ -755,22 +594,14 @@ func TestStateFile_ReadOnlyDefaultsToFalse(t *testing.T) {
 	path, err := WriteStateFile(
 		dir, "127.0.0.1", 9877, "test", false,
 	)
-	if err != nil {
-		t.Fatalf("WriteStateFile: %v", err)
-	}
+	require.NoError(t, err)
 	defer RemoveStateFile(dir, 9877)
 
 	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading state file: %v", err)
-	}
+	require.NoError(t, err)
 	var sf StateFile
-	if err := json.Unmarshal(raw, &sf); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if sf.ReadOnly {
-		t.Error("ReadOnly = true, want false")
-	}
+	require.NoError(t, json.Unmarshal(raw, &sf))
+	assert.False(t, sf.ReadOnly)
 }
 
 func TestStateFileName(t *testing.T) {
@@ -783,12 +614,7 @@ func TestStateFileName(t *testing.T) {
 		{443, "server.443.json"},
 	}
 	for _, tt := range tests {
-		got := stateFileName(tt.port)
-		if got != tt.want {
-			t.Errorf(
-				"stateFileName(%d) = %q, want %q",
-				tt.port, got, tt.want,
-			)
-		}
+		assert.Equal(t, tt.want, stateFileName(tt.port),
+			"stateFileName(%d)", tt.port)
 	}
 }

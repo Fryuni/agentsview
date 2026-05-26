@@ -13,6 +13,8 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // ---- protobuf wire walker -------------------------------------
@@ -65,35 +67,26 @@ func TestAgProtoParseAndExtract(t *testing.T) {
 	})
 
 	fields, err := agProtoParse(payload)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if len(fields) != 3 {
-		t.Fatalf("got %d fields, want 3", len(fields))
-	}
+	require.NoError(t, err, "parse")
+	require.Len(t, fields, 3)
 
 	// Field 17 should be a UTF-8 string with no nested decoding.
 	got, _ := agProtoFind(fields, 17)
 	s, ok := agProtoString(got)
-	if !ok || s != "Hi, what's up next?" {
-		t.Fatalf("field 17: got %q ok=%v", s, ok)
-	}
+	require.True(t, ok, "field 17 string ok")
+	assert.Equal(t, "Hi, what's up next?", s, "field 17")
 
 	// Field 5 should have nested fields parsed as a Timestamp.
 	tsf, _ := agProtoFind(fields, 5)
-	if tsf.Nested == nil {
-		t.Fatalf("field 5 not parsed as nested")
-	}
+	require.NotNil(t, tsf.Nested, "field 5 not parsed as nested")
 	sec, nanos, ok := agProtoTimestamp(tsf.Nested)
-	if !ok || sec != 1779326586 || nanos != 12345 {
-		t.Fatalf("timestamp: sec=%d nanos=%d ok=%v",
-			sec, nanos, ok)
-	}
+	require.True(t, ok, "timestamp ok")
+	assert.Equal(t, int64(1779326586), sec, "timestamp sec")
+	assert.Equal(t, int32(12345), nanos, "timestamp nanos")
 
 	strs := agProtoCollectStrings(fields, 5)
-	if len(strs) != 1 || strs[0] != "Hi, what's up next?" {
-		t.Fatalf("collect strings: %#v", strs)
-	}
+	require.Len(t, strs, 1)
+	assert.Equal(t, "Hi, what's up next?", strs[0])
 }
 
 // TestAgProtoLengthOverflow feeds a length-delimited field whose
@@ -120,9 +113,8 @@ func TestAgProtoLengthOverflow(t *testing.T) {
 			t.Fatalf("agProtoParse panicked: %v", r)
 		}
 	}()
-	if _, err := agProtoParse(payload); err == nil {
-		t.Fatalf("expected error for oversized length, got nil")
-	}
+	_, err := agProtoParse(payload)
+	require.Error(t, err, "expected error for oversized length")
 }
 
 // TestAgProtoLooksLikePrefix exercises the prefix-tolerant
@@ -134,9 +126,7 @@ func TestAgProtoLooksLikePrefix(t *testing.T) {
 		{num: 1, wire: pbWireVarint, varint: 42},
 		{num: 2, wire: pbWireBytes, bytes: []byte("hello there")},
 	})
-	if !agProtoLooksLikePrefix(complete) {
-		t.Fatalf("complete message rejected")
-	}
+	require.True(t, agProtoLooksLikePrefix(complete), "complete message rejected")
 
 	// Append a length-delimited field whose declared length runs
 	// past the end of the buffer — agProtoParse rejects this, but
@@ -146,20 +136,13 @@ func TestAgProtoLooksLikePrefix(t *testing.T) {
 		// tag for field 3, wire 2; length 100; only 3 actual bytes
 		0x1A, 0x64, 0x41, 0x42, 0x43,
 	)
-	if agProtoLooksLikePrefix(truncated) != true {
-		t.Fatalf("truncated tail rejected; want accepted")
-	}
-	if _, err := agProtoParse(truncated); err == nil {
-		t.Fatalf("agProtoParse should still reject truncated tail")
-	}
+	assert.True(t, agProtoLooksLikePrefix(truncated), "truncated tail rejected")
+	_, err := agProtoParse(truncated)
+	require.Error(t, err, "agProtoParse should still reject truncated tail")
 
 	// Pure garbage with zero clean fields → reject.
-	if agProtoLooksLikePrefix([]byte{0x00, 0x00, 0x00}) {
-		t.Fatalf("zero-field-number garbage accepted")
-	}
-	if agProtoLooksLikePrefix(nil) {
-		t.Fatalf("empty input accepted")
-	}
+	assert.False(t, agProtoLooksLikePrefix([]byte{0x00, 0x00, 0x00}), "zero-field-number garbage accepted")
+	assert.False(t, agProtoLooksLikePrefix(nil), "empty input accepted")
 }
 
 func TestEarliestAntigravityTimestamp(t *testing.T) {
@@ -175,13 +158,9 @@ func TestEarliestAntigravityTimestamp(t *testing.T) {
 		{num: 4, wire: pbWireBytes, bytes: older},
 	})
 	fields, err := agProtoParse(payload)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
+	require.NoError(t, err, "parse")
 	got := earliestAntigravityTimestamp(fields)
-	if got.Unix() != 1700000000 {
-		t.Fatalf("got %d, want 1700000000", got.Unix())
-	}
+	assert.Equal(t, int64(1700000000), got.Unix())
 }
 
 // ---- CLI parser -----------------------------------------------
@@ -217,57 +196,29 @@ func TestAntigravityCLIDiscoverAndParse(t *testing.T) {
 
 	// Discovery should return the .pb with the right project.
 	files := DiscoverAntigravityCLISessions(root)
-	if len(files) != 1 {
-		t.Fatalf("discover: got %d files, want 1", len(files))
-	}
-	if files[0].Project != "/tmp/proj" {
-		t.Fatalf("project: got %q want /tmp/proj", files[0].Project)
-	}
+	require.Len(t, files, 1, "discover")
+	assert.Equal(t, "/tmp/proj", files[0].Project, "project")
 
 	// Find by id should locate the same .pb.
-	if got := FindAntigravityCLISourceFile(root, id); got !=
-		files[0].Path {
-		t.Fatalf("find: got %q want %q", got, files[0].Path)
-	}
+	assert.Equal(t, files[0].Path, FindAntigravityCLISourceFile(root, id), "find")
 
 	sess, msgs, err := ParseAntigravityCLISession(
 		files[0].Path, files[0].Project, "test-machine",
 	)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if sess.ID != "antigravity-cli:"+id {
-		t.Fatalf("session id: %q", sess.ID)
-	}
+	require.NoError(t, err, "parse")
+	assert.Equal(t, "antigravity-cli:"+id, sess.ID)
 	// One user message from history + one assistant from brain.
-	if len(msgs) != 2 {
-		t.Fatalf("msgs: got %d want 2", len(msgs))
-	}
-	if msgs[0].Role != RoleUser ||
-		!strings.Contains(msgs[0].Content, "hello world") {
-		t.Fatalf("msg0: %+v", msgs[0])
-	}
-	if msgs[1].Role != RoleAssistant ||
-		!strings.Contains(msgs[1].Content, "step one") ||
-		!strings.Contains(msgs[1].Content, "Top task summary") {
-		t.Fatalf("msg1: %+v", msgs[1])
-	}
-	if sess.MessageCount != 2 || sess.UserMessageCount != 1 {
-		t.Fatalf(
-			"counts: msg=%d user=%d",
-			sess.MessageCount, sess.UserMessageCount,
-		)
-	}
-	if sess.FirstMessage != "hello world" {
-		t.Fatalf("first message: %q", sess.FirstMessage)
-	}
+	require.Len(t, msgs, 2)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Contains(t, msgs[0].Content, "hello world")
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Contains(t, msgs[1].Content, "step one")
+	assert.Contains(t, msgs[1].Content, "Top task summary")
+	assert.Equal(t, 2, sess.MessageCount)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, "hello world", sess.FirstMessage)
 	// StartedAt is the user message timestamp (epoch ms).
-	if sess.StartedAt.UnixMilli() != 1779000000000 {
-		t.Fatalf(
-			"startedAt: %d want 1779000000000",
-			sess.StartedAt.UnixMilli(),
-		)
-	}
+	assert.Equal(t, int64(1779000000000), sess.StartedAt.UnixMilli())
 }
 
 func TestAntigravityCLIDiscoverIgnoresJunk(t *testing.T) {
@@ -282,9 +233,7 @@ func TestAntigravityCLIDiscoverIgnoresJunk(t *testing.T) {
 	mustWrite(t,
 		filepath.Join(root, "conversations", "bad.name.pb"),
 		[]byte("x"))
-	if files := DiscoverAntigravityCLISessions(root); len(files) != 0 {
-		t.Fatalf("expected 0 files, got %d", len(files))
-	}
+	assert.Empty(t, DiscoverAntigravityCLISessions(root))
 }
 
 // ---- IDE parser -----------------------------------------------
@@ -311,49 +260,34 @@ func TestAntigravityIDEDiscoverAndParse(t *testing.T) {
 		[]byte(`{"summary":"Plan summary","updatedAt":"2026-05-20T22:47:27Z"}`))
 
 	files := DiscoverAntigravitySessions(root)
-	if len(files) != 1 || files[0].Path != dbPath {
-		t.Fatalf("discover: %#v", files)
-	}
-	if got := FindAntigravitySourceFile(root, id); got != dbPath {
-		t.Fatalf("find: got %q want %q", got, dbPath)
-	}
+	require.Len(t, files, 1)
+	assert.Equal(t, dbPath, files[0].Path)
+	assert.Equal(t, dbPath, FindAntigravitySourceFile(root, id))
 
 	sess, msgs, err := ParseAntigravitySession(
 		dbPath, "", "test-machine",
 	)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if sess.ID != "antigravity:"+id {
-		t.Fatalf("session id: %q", sess.ID)
-	}
+	require.NoError(t, err, "parse")
+	assert.Equal(t, "antigravity:"+id, sess.ID)
 	// 2 step rows + 1 brain artifact = 3 messages
-	if len(msgs) != 3 {
-		t.Fatalf("msgs: %d", len(msgs))
-	}
+	require.Len(t, msgs, 3)
 	// step_type=14 should be flagged as user
 	var sawUser, sawAssistant bool
 	for _, m := range msgs {
 		if m.Role == RoleUser {
 			sawUser = true
-			if !strings.Contains(m.Content, "user prompt text") {
-				t.Fatalf("user msg content: %q", m.Content)
-			}
+			assert.Contains(t, m.Content, "user prompt text")
 		}
 		if m.Role == RoleAssistant &&
 			strings.Contains(m.Content, "Plan summary") {
 			sawAssistant = true
 		}
 	}
-	if !sawUser || !sawAssistant {
-		t.Fatalf("missing role(s): user=%v assistant=%v",
-			sawUser, sawAssistant)
-	}
+	assert.True(t, sawUser, "missing user role")
+	assert.True(t, sawAssistant, "missing assistant role")
 	// Annotation overrides endedAt to 2026-05-20T... =
 	// 1779326586
-	if sess.EndedAt.Unix() != 1779326586 {
-		t.Fatalf("endedAt: %d", sess.EndedAt.Unix())
-	}
+	assert.Equal(t, int64(1779326586), sess.EndedAt.Unix())
 }
 
 // ---- crypto: key loading --------------------------------------
@@ -379,32 +313,22 @@ func TestDecryptAesGCMRoundTrip(t *testing.T) {
 	plaintext := []byte("hello antigravity gcm world")
 
 	block, err := aes.NewCipher(key)
-	if err != nil {
-		t.Fatalf("new cipher: %v", err)
-	}
+	require.NoError(t, err, "new cipher")
 	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		t.Fatalf("new gcm: %v", err)
-	}
+	require.NoError(t, err, "new gcm")
 	nonce := bytes.Repeat([]byte{0x01}, 12)
 	ct := gcm.Seal(nil, nonce, plaintext, nil)
 	data := append(append([]byte{}, nonce...), ct...)
 
 	got := decryptAesGCM(data, key, 0)
-	if !bytes.Equal(got, plaintext) {
-		t.Fatalf("decrypt: got %q want %q", got, plaintext)
-	}
+	assert.True(t, bytes.Equal(got, plaintext), "decrypt: got %q want %q", got, plaintext)
 
 	// Wrong key → nil (auth tag fails).
 	bad := bytes.Repeat([]byte{0x43}, 32)
-	if out := decryptAesGCM(data, bad, 0); out != nil {
-		t.Fatalf("wrong key should fail, got %q", out)
-	}
+	assert.Nil(t, decryptAesGCM(data, bad, 0), "wrong key should fail")
 
 	// Too-short input → nil, not panic.
-	if out := decryptAesGCM([]byte{0x00}, key, 0); out != nil {
-		t.Fatalf("short input should return nil, got %q", out)
-	}
+	assert.Nil(t, decryptAesGCM([]byte{0x00}, key, 0), "short input should return nil")
 }
 
 // TestDecryptAesGCMSkip confirms the leading-bytes skip works as
@@ -423,9 +347,7 @@ func TestDecryptAesGCMSkip(t *testing.T) {
 	data = append(data, ct...)
 
 	got := decryptAesGCM(data, key, len(prefix))
-	if !bytes.Equal(got, plaintext) {
-		t.Fatalf("decrypt with skip: got %q want %q", got, plaintext)
-	}
+	assert.True(t, bytes.Equal(got, plaintext), "decrypt with skip: got %q want %q", got, plaintext)
 }
 
 func TestStripPKCS7(t *testing.T) {
@@ -470,9 +392,7 @@ func TestStripPKCS7(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := stripPKCS7(tc.in); !bytes.Equal(got, tc.want) {
-				t.Fatalf("got %v want %v", got, tc.want)
-			}
+			assert.Equal(t, tc.want, stripPKCS7(tc.in))
 		})
 	}
 }
@@ -496,9 +416,7 @@ func TestAntigravityCLIDiscoverImplicit(t *testing.T) {
 		[]byte("x"))
 
 	files := DiscoverAntigravityCLISessions(root)
-	if len(files) != 2 {
-		t.Fatalf("got %d files, want 2 (one per subdir)", len(files))
-	}
+	require.Len(t, files, 2, "got files, want 2 (one per subdir)")
 	var sawConv, sawImpl bool
 	for _, f := range files {
 		switch filepath.Base(filepath.Dir(f.Path)) {
@@ -508,28 +426,22 @@ func TestAntigravityCLIDiscoverImplicit(t *testing.T) {
 			sawImpl = true
 		}
 	}
-	if !sawConv || !sawImpl {
-		t.Fatalf("missing subdir: conv=%v impl=%v",
-			sawConv, sawImpl)
-	}
+	assert.True(t, sawConv, "missing conv subdir")
+	assert.True(t, sawImpl, "missing impl subdir")
 
 	// FindAntigravityCLISourceFile routes implicit-tagged ids to
 	// the implicit/ subdir; bare ids resolve under conversations/.
 	wantImpl := filepath.Join("implicit", implID+".pb")
-	if got := FindAntigravityCLISourceFile(
-		root, "implicit-"+implID,
-	); got == "" || !strings.HasSuffix(got, wantImpl) {
-		t.Fatalf("find implicit: %q", got)
-	}
+	gotImpl := FindAntigravityCLISourceFile(root, "implicit-"+implID)
+	require.NotEmpty(t, gotImpl)
+	assert.True(t, strings.HasSuffix(gotImpl, wantImpl), "find implicit: %q", gotImpl)
 	wantConv := filepath.Join("conversations", convID+".pb")
-	if got := FindAntigravityCLISourceFile(root, convID); got == "" ||
-		!strings.HasSuffix(got, wantConv) {
-		t.Fatalf("find conv: %q", got)
-	}
+	gotConv := FindAntigravityCLISourceFile(root, convID)
+	require.NotEmpty(t, gotConv)
+	assert.True(t, strings.HasSuffix(gotConv, wantConv), "find conv: %q", gotConv)
 	// A bare implicit-only UUID must NOT resolve under conversations/.
-	if got := FindAntigravityCLISourceFile(root, implID); got != "" {
-		t.Fatalf("bare implicit id should not resolve: %q", got)
-	}
+	assert.Empty(t, FindAntigravityCLISourceFile(root, implID),
+		"bare implicit id should not resolve")
 }
 
 // TestAntigravityCLIImplicitSessionIDDistinct ensures a UUID that
@@ -547,33 +459,16 @@ func TestAntigravityCLIImplicitSessionIDDistinct(t *testing.T) {
 	mustWrite(t, implPath, []byte("x"))
 
 	convSess, _, err := ParseAntigravityCLISession(convPath, "", "m")
-	if err != nil {
-		t.Fatalf("parse conv: %v", err)
-	}
+	require.NoError(t, err, "parse conv")
 	implSess, _, err := ParseAntigravityCLISession(implPath, "", "m")
-	if err != nil {
-		t.Fatalf("parse impl: %v", err)
-	}
-	if convSess.ID == implSess.ID {
-		t.Fatalf("session ids collide: conv=%q impl=%q",
-			convSess.ID, implSess.ID)
-	}
-	if convSess.ID != "antigravity-cli:"+id {
-		t.Fatalf("conv id: %q", convSess.ID)
-	}
-	if implSess.ID != "antigravity-cli:implicit-"+id {
-		t.Fatalf("impl id: %q", implSess.ID)
-	}
+	require.NoError(t, err, "parse impl")
+	assert.NotEqual(t, implSess.ID, convSess.ID, "session ids collide")
+	assert.Equal(t, "antigravity-cli:"+id, convSess.ID, "conv id")
+	assert.Equal(t, "antigravity-cli:implicit-"+id, implSess.ID, "impl id")
 
 	// Round-trip: each storage id resolves back to its own file.
-	if got := FindAntigravityCLISourceFile(root, id); got != convPath {
-		t.Fatalf("round-trip conv: %q", got)
-	}
-	if got := FindAntigravityCLISourceFile(
-		root, "implicit-"+id,
-	); got != implPath {
-		t.Fatalf("round-trip impl: %q", got)
-	}
+	assert.Equal(t, convPath, FindAntigravityCLISourceFile(root, id), "round-trip conv")
+	assert.Equal(t, implPath, FindAntigravityCLISourceFile(root, "implicit-"+id), "round-trip impl")
 }
 
 func TestBuildAntigravityProjectMapRobust(t *testing.T) {
@@ -581,9 +476,7 @@ func TestBuildAntigravityProjectMapRobust(t *testing.T) {
 	path := filepath.Join(root, "history.jsonl")
 
 	// Missing file → empty map, no error.
-	if m := buildAntigravityProjectMap(path); len(m) != 0 {
-		t.Fatalf("missing file: got %d entries", len(m))
-	}
+	assert.Empty(t, buildAntigravityProjectMap(path), "missing file")
 
 	// Mix of valid rows, blank lines, garbage, and rows missing
 	// one of the two required fields. Only the valid rows survive.
@@ -596,31 +489,23 @@ func TestBuildAntigravityProjectMapRobust(t *testing.T) {
 			`{"conversationId":"id-3","workspace":"/tmp/c"}`+"\n",
 	))
 	m := buildAntigravityProjectMap(path)
-	if len(m) != 2 {
-		t.Fatalf("got %d entries, want 2: %#v", len(m), m)
-	}
-	if m["id-1"] != "/tmp/a" || m["id-3"] != "/tmp/c" {
-		t.Fatalf("unexpected map: %#v", m)
-	}
-	if _, ok := m["id-2"]; ok {
-		t.Fatalf("id-2 had no workspace, should be absent")
-	}
+	require.Len(t, m, 2, "map entries")
+	assert.Equal(t, "/tmp/a", m["id-1"])
+	assert.Equal(t, "/tmp/c", m["id-3"])
+	_, ok := m["id-2"]
+	assert.False(t, ok, "id-2 had no workspace, should be absent")
 }
 
 // ---- helpers --------------------------------------------------
 
 func mustMkdir(t *testing.T, p string) {
 	t.Helper()
-	if err := os.MkdirAll(p, 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", p, err)
-	}
+	require.NoError(t, os.MkdirAll(p, 0o755), "mkdir %s", p)
 }
 
 func mustWrite(t *testing.T, p string, b []byte) {
 	t.Helper()
-	if err := os.WriteFile(p, b, 0o644); err != nil {
-		t.Fatalf("write %s: %v", p, err)
-	}
+	require.NoError(t, os.WriteFile(p, b, 0o644), "write %s", p)
 }
 
 // createAntigravityTestDB writes a minimal antigravity IDE
@@ -629,9 +514,7 @@ func mustWrite(t *testing.T, p string, b []byte) {
 func createAntigravityTestDB(t *testing.T, path string) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", path)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
+	require.NoError(t, err, "open")
 	defer db.Close()
 	mustExec(t, db, `CREATE TABLE trajectory_meta (
 		trajectory_id text, cascade_id text,
@@ -684,9 +567,8 @@ func mustExec(
 	t *testing.T, db *sql.DB, q string, args ...any,
 ) {
 	t.Helper()
-	if _, err := db.Exec(q, args...); err != nil {
-		t.Fatalf("exec %q: %v", q, err)
-	}
+	_, err := db.Exec(q, args...)
+	require.NoError(t, err, "exec %q", q)
 }
 
 // silence unused warning on time import in case the file is

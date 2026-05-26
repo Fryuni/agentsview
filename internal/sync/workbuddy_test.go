@@ -5,17 +5,15 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
 func TestWorkBuddyRegistryUsesRecursiveWatch(t *testing.T) {
 	def, ok := parser.AgentByType(parser.AgentWorkBuddy)
-	if !ok {
-		t.Fatal("AgentWorkBuddy missing from Registry")
-	}
-	if def.ShallowWatch {
-		t.Fatal("WorkBuddy should use recursive watch for nested sessions")
-	}
+	require.True(t, ok, "AgentWorkBuddy missing from Registry")
+	require.False(t, def.ShallowWatch, "WorkBuddy should use recursive watch for nested sessions")
 }
 
 func TestEngineClassifyWorkBuddyPaths(t *testing.T) {
@@ -32,33 +30,24 @@ func TestEngineClassifyWorkBuddyPaths(t *testing.T) {
 	subPath := filepath.Join(root, "proj", "11111111-1111-4111-8111-111111111111", "subagents", "agent-123.jsonl")
 	toolPath := filepath.Join(root, "proj", "11111111-1111-4111-8111-111111111111", "tool-results", "tool_123.txt")
 	for _, path := range []string{mainPath, subPath, toolPath} {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatalf("MkdirAll(%q): %v", path, err)
-		}
-		if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
-			t.Fatalf("WriteFile(%q): %v", path, err)
-		}
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o644))
 	}
 
 	got, ok := engine.classifyOnePath(mainPath, nil)
-	if !ok {
-		t.Fatal("main path did not classify")
-	}
-	if got.Path != mainPath || got.Project != "proj" || got.Agent != parser.AgentWorkBuddy {
-		t.Fatalf("main classified as %+v", got)
-	}
+	require.True(t, ok, "main path did not classify")
+	assert.Equal(t, mainPath, got.Path)
+	assert.Equal(t, "proj", got.Project)
+	assert.Equal(t, parser.AgentWorkBuddy, got.Agent)
 
 	got, ok = engine.classifyOnePath(subPath, nil)
-	if !ok {
-		t.Fatal("subagent path did not classify")
-	}
-	if got.Path != subPath || got.Project != "proj" || got.Agent != parser.AgentWorkBuddy {
-		t.Fatalf("subagent classified as %+v", got)
-	}
+	require.True(t, ok, "subagent path did not classify")
+	assert.Equal(t, subPath, got.Path)
+	assert.Equal(t, "proj", got.Project)
+	assert.Equal(t, parser.AgentWorkBuddy, got.Agent)
 
-	if got, ok = engine.classifyOnePath(toolPath, nil); ok {
-		t.Fatalf("tool result classified as %+v", got)
-	}
+	got, ok = engine.classifyOnePath(toolPath, nil)
+	assert.False(t, ok, "tool result classified as %+v", got)
 }
 
 func TestEngineClassifyWorkBuddyProjectNamedSubagentsAsMainSession(t *testing.T) {
@@ -72,18 +61,12 @@ func TestEngineClassifyWorkBuddyProjectNamedSubagentsAsMainSession(t *testing.T)
 	})
 
 	path := filepath.Join(root, "subagents", "11111111-1111-4111-8111-111111111111.jsonl")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o644))
 
 	got, ok := engine.classifyOnePath(path, nil)
-	if !ok {
-		t.Fatal("path did not classify")
-	}
-	if got.Path != path || got.Project != "subagents" || got.Agent != parser.AgentWorkBuddy {
-		t.Fatalf("classified as %+v", got)
-	}
+	require.True(t, ok, "path did not classify")
+	assert.Equal(t, path, got.Path)
+	assert.Equal(t, "subagents", got.Project)
+	assert.Equal(t, parser.AgentWorkBuddy, got.Agent)
 }

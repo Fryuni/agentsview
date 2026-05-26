@@ -3,9 +3,11 @@ package git
 import (
 	"os"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // initBareRepo runs `git init -b main` at root and configures a
@@ -25,9 +27,7 @@ func initBareRepo(t *testing.T) string {
 func mkdirIn(t *testing.T, root, rel string) string {
 	t.Helper()
 	p := filepath.Join(root, rel)
-	if err := os.MkdirAll(p, 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", p, err)
-	}
+	require.NoError(t, os.MkdirAll(p, 0o755), "mkdir %s", p)
 	return p
 }
 
@@ -56,9 +56,7 @@ func TestDiscoverRepos_FindsRootAndFiltersMissing(t *testing.T) {
 
 	got := DiscoverRepos([]string{sub, outside})
 	want := []string{repoA}
-	if !reflect.DeepEqual(canonAll(got), canonAll(want)) {
-		t.Fatalf("DiscoverRepos = %v, want %v", got, want)
-	}
+	assert.Equal(t, canonAll(want), canonAll(got), "DiscoverRepos")
 }
 
 func TestDiscoverRepos_Dedup(t *testing.T) {
@@ -68,26 +66,18 @@ func TestDiscoverRepos_Dedup(t *testing.T) {
 	sub2 := mkdirIn(t, repoA, "sub2/deeper")
 
 	got := DiscoverRepos([]string{sub1, sub2, repoA})
-	if len(got) != 1 {
-		t.Fatalf("DiscoverRepos = %v, want exactly one entry "+
-			"(dedup)", got)
-	}
-	if !reflect.DeepEqual(canonAll(got), canonAll([]string{repoA})) {
-		t.Fatalf("DiscoverRepos = %v, want %v", got, repoA)
-	}
+	require.Len(t, got, 1, "want exactly one entry (dedup)")
+	assert.Equal(t, canonAll([]string{repoA}), canonAll(got),
+		"DiscoverRepos")
 }
 
 func TestDiscoverRepos_EmptyInputReturnsEmptySlice(t *testing.T) {
 	got := DiscoverRepos(nil)
-	if got == nil || len(got) != 0 {
-		t.Fatalf("DiscoverRepos(nil) = %v, want non-nil empty slice",
-			got)
-	}
+	require.NotNil(t, got, "DiscoverRepos(nil)")
+	assert.Empty(t, got, "DiscoverRepos(nil) should be empty slice")
 	got = DiscoverRepos([]string{})
-	if got == nil || len(got) != 0 {
-		t.Fatalf("DiscoverRepos([]) = %v, want non-nil empty slice",
-			got)
-	}
+	require.NotNil(t, got, "DiscoverRepos([])")
+	assert.Empty(t, got, "DiscoverRepos([]) should be empty slice")
 }
 
 // TestDiscoverRepos_LinkedWorktreeResolves covers the regression flagged
@@ -109,16 +99,11 @@ func TestDiscoverRepos_LinkedWorktreeResolves(t *testing.T) {
 	)
 
 	got := DiscoverRepos([]string{worktreeRoot})
-	if len(got) != 1 {
-		t.Fatalf("DiscoverRepos = %v, want one worktree root", got)
-	}
-	if !reflect.DeepEqual(
-		canonAll(got),
+	require.Len(t, got, 1, "want one worktree root")
+	assert.Equal(t,
 		canonAll([]string{worktreeRoot}),
-	) {
-		t.Fatalf("DiscoverRepos = %v, want %v "+
-			"(worktree path)", got, worktreeRoot)
-	}
+		canonAll(got),
+		"DiscoverRepos (worktree path)")
 }
 
 // TestDiscoverRepos_MissingCwdSkipped confirms that a cwd whose path is
@@ -129,7 +114,5 @@ func TestDiscoverRepos_MissingCwdSkipped(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "no", "such", "path")
 
 	got := DiscoverRepos([]string{missing})
-	if len(got) != 0 {
-		t.Fatalf("DiscoverRepos = %v, want empty (missing path)", got)
-	}
+	assert.Empty(t, got, "DiscoverRepos missing path")
 }

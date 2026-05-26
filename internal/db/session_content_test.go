@@ -3,6 +3,9 @@ package db
 import (
 	"context"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestReplaceSessionContentAtomic(t *testing.T) {
@@ -18,19 +21,11 @@ func TestReplaceSessionContentAtomic(t *testing.T) {
 		LocationKind: "message", MessageOrdinal: 0, MatchStart: 4, MatchEnd: 24,
 		MatchIndex: 0, RedactedMatch: "AKIA…MPLE", RulesVersion: "rulesv1",
 	}}
-	if err := d.ReplaceSessionContent("s1", msgs, signals, findings); err != nil {
-		t.Fatalf("ReplaceSessionContent: %v", err)
-	}
+	require.NoError(t, d.ReplaceSessionContent("s1", msgs, signals, findings))
 	got, _ := d.GetAllMessages(context.Background(), "s1")
-	if len(got) != 1 {
-		t.Fatalf("messages: got %d, want 1", len(got))
-	}
+	require.Len(t, got, 1)
 	f, _ := d.SessionSecretFindings(context.Background(), "s1")
-	if len(f) != 1 {
-		t.Fatalf("findings: got %d, want 1", len(f))
-	}
+	require.Len(t, f, 1)
 	s, _ := d.GetSession(context.Background(), "s1")
-	if s.SecretLeakCount != 1 {
-		t.Errorf("SecretLeakCount = %d, want 1", s.SecretLeakCount)
-	}
+	assert.Equal(t, 1, s.SecretLeakCount)
 }

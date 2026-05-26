@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestContentTypeWrapper verifies that Content-Type is only set if missing
@@ -78,21 +81,15 @@ func TestContentTypeWrapper(t *testing.T) {
 
 			gotCT := resp.Header.Get("Content-Type")
 			if tt.wantContentType != "" {
-				if gotCT != tt.wantContentType {
-					t.Errorf("Content-Type = %q, want %q", gotCT, tt.wantContentType)
-				}
-			} else if gotCT == "application/json" {
-				// Wrapper shouldn't improperly force its Content-Type
-				t.Errorf("Content-Type = %q, unexpectedly forced by wrapper", gotCT)
+				assert.Equal(t, tt.wantContentType, gotCT)
+			} else {
+				assert.NotEqual(t, "application/json", gotCT,
+					"Content-Type unexpectedly forced by wrapper")
 			}
 
 			body, err := io.ReadAll(resp.Body)
-			if err != nil {
-				t.Fatalf("failed to read body: %v", err)
-			}
-			if string(body) != tt.wantBody {
-				t.Errorf("body = %q, want %q", string(body), tt.wantBody)
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantBody, string(body))
 		})
 	}
 }
@@ -111,9 +108,7 @@ func TestMiddlewareTimeout(t *testing.T) {
 	// rebuild Handler() with the correct port in the Host
 	// allowlist.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
+	require.NoError(t, err)
 	port := ln.Addr().(*net.TCPAddr).Port
 	srv.SetPort(port)
 	ts := httptest.NewUnstartedServer(srv.Handler())
@@ -137,20 +132,15 @@ func TestMiddlewareTimeout(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			resp, err := ts.Client().Get(ts.URL + tt.path)
-			if err != nil {
-				t.Fatalf("request failed: %v", err)
-			}
+			require.NoError(t, err)
 			defer resp.Body.Close()
 
 			if tt.wantTimeout {
 				assertTimeoutResponse(t, resp)
 			} else {
-				if isTimeoutResponse(t, resp) {
-					t.Errorf("%s: unexpected timeout for unwrapped route", tt.path)
-				}
-				if resp.StatusCode != tt.wantStatus {
-					t.Errorf("%s: status = %d, want %d", tt.path, resp.StatusCode, tt.wantStatus)
-				}
+				assert.False(t, isTimeoutResponse(t, resp),
+					"%s: unexpected timeout for unwrapped route", tt.path)
+				assert.Equal(t, tt.wantStatus, resp.StatusCode, tt.path)
 			}
 		})
 	}
@@ -257,23 +247,15 @@ func TestCSPMiddlewareSetsHeaderOnNonAPIRoutes(t *testing.T) {
 
 			csp := w.Header().Get("Content-Security-Policy")
 			if !tt.wantCSP {
-				if csp != "" {
-					t.Errorf("expected no CSP header on API route, got %q", csp)
-				}
+				assert.Empty(t, csp, "expected no CSP header on API route")
 				return
 			}
-			if csp == "" {
-				t.Fatal("expected CSP header, got empty")
-			}
+			require.NotEmpty(t, csp, "expected CSP header")
 			got := parseCSP(csp)
 			for name, want := range tt.wantDirectives {
-				if got[name] != want {
-					t.Errorf("directive %s = %q, want %q", name, got[name], want)
-				}
+				assert.Equal(t, want, got[name], "directive %s", name)
 			}
-			if xfo := w.Header().Get("X-Frame-Options"); xfo != "DENY" {
-				t.Errorf("X-Frame-Options = %q, want DENY", xfo)
-			}
+			assert.Equal(t, "DENY", w.Header().Get("X-Frame-Options"))
 		})
 	}
 }
@@ -289,9 +271,8 @@ func TestBuildCSPPolicyWidensConnectSrcOnly(t *testing.T) {
 
 	directives := parseCSP(buildCSPPolicy("127.0.0.1", 8081, ""))
 
-	if got := directives["connect-src"]; got != "'self' http: https: ws: wss:" {
-		t.Errorf("connect-src = %q, want it widened to any http/https/ws/wss origin", got)
-	}
+	assert.Equal(t, "'self' http: https: ws: wss:", directives["connect-src"],
+		"connect-src should be widened to any http/https/ws/wss origin")
 
 	// Scheme-source wildcards must not leak into the directives that
 	// gate code/resource loading, or the widening would defeat the
@@ -302,10 +283,9 @@ func TestBuildCSPPolicyWidensConnectSrcOnly(t *testing.T) {
 	}
 	for _, name := range locked {
 		for field := range strings.FieldsSeq(directives[name]) {
-			if schemeWildcards[field] {
-				t.Errorf("directive %s must stay pinned but allows %q (full: %q)",
-					name, field, directives[name])
-			}
+			assert.False(t, schemeWildcards[field],
+				"directive %s must stay pinned but allows %q (full: %q)",
+				name, field, directives[name])
 		}
 	}
 }
@@ -334,10 +314,6 @@ func TestCORSMiddlewareMergesVaryHeader(t *testing.T) {
 
 	assertRecorderStatus(t, w, http.StatusOK)
 	vary := w.Header().Get("Vary")
-	if !strings.Contains(vary, "Accept-Encoding") {
-		t.Fatalf("expected Vary to include Accept-Encoding, got %q", vary)
-	}
-	if !strings.Contains(vary, "Origin") {
-		t.Fatalf("expected Vary to include Origin, got %q", vary)
-	}
+	assert.Contains(t, vary, "Accept-Encoding")
+	assert.Contains(t, vary, "Origin")
 }

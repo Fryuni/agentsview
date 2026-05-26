@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // seedSearchSession inserts one session with the given messages
@@ -25,9 +28,7 @@ func seedSearchSession(t *testing.T, d *DB, id, project string, msgs [][2]string
 			Content: rc[1], Timestamp: "2026-05-20T12:00:0" + itoa(i) + "Z",
 		})
 	}
-	if err := d.ReplaceSessionMessages(id, out); err != nil {
-		t.Fatalf("ReplaceSessionMessages: %v", err)
-	}
+	require.NoError(t, d.ReplaceSessionMessages(id, out), "ReplaceSessionMessages")
 }
 
 func TestSearchContentSubstringMessages(t *testing.T) {
@@ -40,22 +41,14 @@ func TestSearchContentSubstringMessages(t *testing.T) {
 		Pattern: "database_url", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent: %v", err)
-	}
-	if len(got.Matches) != 1 {
-		t.Fatalf("got %d matches, want 1: %+v", len(got.Matches), got.Matches)
-	}
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, got.Matches, 1, "matches")
 	m := got.Matches[0]
-	if m.SessionID != "s1" || m.Location != "message" || m.Ordinal != 0 {
-		t.Errorf("unexpected match: %+v", m)
-	}
-	if m.Role != "user" {
-		t.Errorf("Role = %q, want user", m.Role)
-	}
-	if !contains(m.Snippet, "DATABASE_URL") {
-		t.Errorf("snippet missing matched text: %q", m.Snippet)
-	}
+	assert.Equal(t, "s1", m.SessionID, "SessionID")
+	assert.Equal(t, "message", m.Location, "Location")
+	assert.Equal(t, 0, m.Ordinal, "Ordinal")
+	assert.Equal(t, "user", m.Role, "Role")
+	assert.Contains(t, m.Snippet, "DATABASE_URL", "snippet")
 }
 
 // TestSearchContentRedactsStraddlingSecret pins the default (non-reveal)
@@ -76,41 +69,19 @@ func TestSearchContentRedactsStraddlingSecret(t *testing.T) {
 		Sources: []string{"messages"}, Limit: 50,
 	}
 	got, err := d.SearchContent(context.Background(), base)
-	if err != nil {
-		t.Fatalf("SearchContent: %v", err)
-	}
-	if len(got.Matches) != 1 {
-		t.Fatalf("got %d matches, want 1", len(got.Matches))
-	}
-	if strings.Contains(got.Matches[0].Snippet, "SECRETKEYMATERIAL") {
-		t.Errorf("default snippet leaked key material: %q", got.Matches[0].Snippet)
-	}
-	if !contains(got.Matches[0].Snippet, "attached key") {
-		t.Errorf("snippet lost the matched context: %q", got.Matches[0].Snippet)
-	}
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, got.Matches, 1)
+	assert.NotContains(t, got.Matches[0].Snippet, "SECRETKEYMATERIAL",
+		"default snippet leaked key material")
+	assert.Contains(t, got.Matches[0].Snippet, "attached key",
+		"snippet lost the matched context")
 
 	// Reveal opts out of redaction (localhost-gated upstream): raw bytes show.
 	base.RevealSecrets = true
 	rev, err := d.SearchContent(context.Background(), base)
-	if err != nil {
-		t.Fatalf("SearchContent reveal: %v", err)
-	}
-	if !strings.Contains(rev.Matches[0].Snippet, "SECRETKEYMATERIAL") {
-		t.Errorf("reveal snippet should show raw bytes: %q", rev.Matches[0].Snippet)
-	}
-}
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (indexOf(s, sub) >= 0)
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
+	require.NoError(t, err, "SearchContent reveal")
+	assert.Contains(t, rev.Matches[0].Snippet, "SECRETKEYMATERIAL",
+		"reveal snippet should show raw bytes")
 }
 
 // TestCaseInsensitiveIndexUnicodeOffset pins that the returned offset indexes
@@ -118,12 +89,11 @@ func indexOf(s, sub string) int {
 // bytes but lowercases to one ('k'), so a ToLower-based index would report a
 // byte offset shifted left of the real match position.
 func TestCaseInsensitiveIndexUnicodeOffset(t *testing.T) {
-	body := strings.Repeat("K", 5) + "match here"
+	body := strings.Repeat("K", 5) + "match here"
 	got := CaseInsensitiveIndex(body, "MATCH")
 	want := strings.Index(body, "match") // real offset into the original string
-	if got != want {
-		t.Errorf("CaseInsensitiveIndex = %d, want %d (offset into original body)", got, want)
-	}
+	assert.Equal(t, want, got,
+		"CaseInsensitiveIndex offset into original body")
 }
 
 // TestSubstringSnippetUnicodeOffset guards against the snippet panic and
@@ -135,9 +105,7 @@ func TestSubstringSnippetUnicodeOffset(t *testing.T) {
 	body := strings.Repeat("Ⱥ", 100) + pat + " trailing context here"
 	f := ContentSearchFilter{Pattern: pat, Mode: "substring"}
 	got := f.substringSnippet(body) // must not panic
-	if !strings.Contains(got, pat) {
-		t.Errorf("snippet did not center on the match: %q", got)
-	}
+	assert.Contains(t, got, pat, "snippet did not center on the match")
 }
 
 func TestSearchContentToolIO(t *testing.T) {
@@ -155,28 +123,25 @@ func TestSearchContentToolIO(t *testing.T) {
 			ResultContent: "AWS_SECRET=topsecretvalue123",
 		}},
 	}}
-	if err := d.ReplaceSessionMessages("s2", msgs); err != nil {
-		t.Fatalf("ReplaceSessionMessages: %v", err)
-	}
+	require.NoError(t, d.ReplaceSessionMessages("s2", msgs),
+		"ReplaceSessionMessages")
 	// match in tool input
 	in, err := d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "printenv", Mode: "substring",
 		Sources: []string{"tool_input"}, Limit: 50,
 	})
-	if err != nil || len(in.Matches) != 1 || in.Matches[0].Location != "tool_input" {
-		t.Fatalf("tool_input search: %+v err=%v", in.Matches, err)
-	}
-	if in.Matches[0].ToolName != "Bash" {
-		t.Errorf("ToolName = %q, want Bash", in.Matches[0].ToolName)
-	}
+	require.NoError(t, err, "tool_input search")
+	require.Len(t, in.Matches, 1, "tool_input search")
+	require.Equal(t, "tool_input", in.Matches[0].Location, "Location")
+	assert.Equal(t, "Bash", in.Matches[0].ToolName, "ToolName")
 	// match in tool result
 	res, err := d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "topsecretvalue", Mode: "substring",
 		Sources: []string{"tool_result"}, Limit: 50,
 	})
-	if err != nil || len(res.Matches) != 1 || res.Matches[0].Location != "tool_result" {
-		t.Fatalf("tool_result search: %+v err=%v", res.Matches, err)
-	}
+	require.NoError(t, err, "tool_result search")
+	require.Len(t, res.Matches, 1, "tool_result search")
+	assert.Equal(t, "tool_result", res.Matches[0].Location, "Location")
 }
 
 // TestSearchContentEmptyToolUseIDNotSuppressed guards the tool-result dedup:
@@ -206,9 +171,8 @@ func TestSearchContentEmptyToolUseIDNotSuppressed(t *testing.T) {
 			},
 		},
 	}}
-	if err := d.ReplaceSessionMessages("empti", msgs); err != nil {
-		t.Fatalf("ReplaceSessionMessages: %v", err)
-	}
+	require.NoError(t, d.ReplaceSessionMessages("empti", msgs),
+		"ReplaceSessionMessages")
 	// ReplaceSessionMessages routes empty ToolUseID through nilIfEmpty so
 	// it lands as NULL. NULL = NULL is false in SQL, so the dedup bug we
 	// want to pin (an empty string matching another empty string) only
@@ -219,34 +183,27 @@ func TestSearchContentEmptyToolUseIDNotSuppressed(t *testing.T) {
 		"UPDATE tool_calls SET tool_use_id = '' WHERE session_id = 'empti'",
 		"UPDATE tool_result_events SET tool_use_id = '' WHERE session_id = 'empti'",
 	} {
-		if _, err := d.getWriter().Exec(sql); err != nil {
-			t.Fatalf("force empty tool_use_id: %v", err)
-		}
+		_, err := d.getWriter().Exec(sql)
+		require.NoError(t, err, "force empty tool_use_id")
 	}
 	for _, mode := range []string{"substring", "regex"} {
 		got, err := d.SearchContent(context.Background(), ContentSearchFilter{
 			Pattern: "FINDA", Mode: mode,
 			Sources: []string{"tool_result"}, Limit: 50,
 		})
-		if err != nil {
-			t.Fatalf("SearchContent %s: %v", mode, err)
-		}
-		if len(got.Matches) != 1 || got.Matches[0].Location != "tool_result" {
-			t.Fatalf("%s: empty-ID result_content suppressed: got %+v, want 1 tool_result",
-				mode, got.Matches)
-		}
+		require.NoError(t, err, "SearchContent %s", mode)
+		require.Len(t, got.Matches, 1,
+			"%s: empty-ID result_content suppressed", mode)
+		assert.Equal(t, "tool_result", got.Matches[0].Location,
+			"%s: want 1 tool_result", mode)
 	}
 	// The event-delivered result is still searchable via the events branch.
 	ev, err := d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "FINDB", Mode: "substring",
 		Sources: []string{"tool_result"}, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent events: %v", err)
-	}
-	if len(ev.Matches) != 1 {
-		t.Errorf("event content not found: got %+v", ev.Matches)
-	}
+	require.NoError(t, err, "SearchContent events")
+	assert.Len(t, ev.Matches, 1, "event content not found")
 }
 
 // TestSearchContentPaginationStableAcrossTies seeds one message ordinal that
@@ -270,9 +227,8 @@ func TestSearchContentPaginationStableAcrossTies(t *testing.T) {
 			ResultContent: "FINDME in result",
 		}},
 	}}
-	if err := d.ReplaceSessionMessages("tie", msgs); err != nil {
-		t.Fatalf("ReplaceSessionMessages: %v", err)
-	}
+	require.NoError(t, d.ReplaceSessionMessages("tie", msgs),
+		"ReplaceSessionMessages")
 	base := ContentSearchFilter{
 		Pattern: "FINDME", Mode: "substring",
 		Sources: []string{"messages", "tool_input", "tool_result"},
@@ -280,18 +236,12 @@ func TestSearchContentPaginationStableAcrossTies(t *testing.T) {
 	full := base
 	full.Limit = 50
 	all, err := d.SearchContent(context.Background(), full)
-	if err != nil {
-		t.Fatalf("SearchContent full: %v", err)
-	}
-	if len(all.Matches) != 3 {
-		t.Fatalf("want 3 tied matches, got %d: %+v", len(all.Matches), all.Matches)
-	}
+	require.NoError(t, err, "SearchContent full")
+	require.Len(t, all.Matches, 3, "tied matches")
 	// The tie-break orders the three sources deterministically by source rank.
 	wantOrder := []string{"message", "tool_input", "tool_result"}
 	for i, loc := range wantOrder {
-		if all.Matches[i].Location != loc {
-			t.Errorf("match %d Location = %q, want %q", i, all.Matches[i].Location, loc)
-		}
+		assert.Equal(t, loc, all.Matches[i].Location, "match %d Location", i)
 	}
 	// Page one row at a time; the sequence must equal the single-page order.
 	var paged []ContentMatch
@@ -300,23 +250,18 @@ func TestSearchContentPaginationStableAcrossTies(t *testing.T) {
 		p.Limit = 1
 		p.Cursor = cursor
 		page, err := d.SearchContent(context.Background(), p)
-		if err != nil {
-			t.Fatalf("SearchContent page at cursor %d: %v", cursor, err)
-		}
+		require.NoError(t, err, "SearchContent page at cursor %d", cursor)
 		paged = append(paged, page.Matches...)
 		if page.NextCursor == 0 {
 			break
 		}
 		cursor = page.NextCursor
 	}
-	if len(paged) != len(all.Matches) {
-		t.Fatalf("paged %d rows, want %d (duplicates or gaps)", len(paged), len(all.Matches))
-	}
+	require.Len(t, paged, len(all.Matches),
+		"paged rows (duplicates or gaps)")
 	for i := range all.Matches {
-		if paged[i].Location != all.Matches[i].Location {
-			t.Errorf("row %d: paged Location %q != single-page %q",
-				i, paged[i].Location, all.Matches[i].Location)
-		}
+		assert.Equal(t, all.Matches[i].Location, paged[i].Location,
+			"row %d: paged Location != single-page", i)
 	}
 }
 
@@ -330,12 +275,9 @@ func TestSearchContentRegex(t *testing.T) {
 		Pattern: `AKIA[0-9A-Z]{16}`, Mode: "regex",
 		Sources: []string{"messages"}, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent regex: %v", err)
-	}
-	if len(got.Matches) != 1 || got.Matches[0].Ordinal != 0 {
-		t.Fatalf("regex match = %+v, want 1 at ordinal 0", got.Matches)
-	}
+	require.NoError(t, err, "SearchContent regex")
+	require.Len(t, got.Matches, 1, "regex match")
+	assert.Equal(t, 0, got.Matches[0].Ordinal, "regex match ordinal")
 }
 
 func TestSearchContentUnknownSource(t *testing.T) {
@@ -343,9 +285,7 @@ func TestSearchContentUnknownSource(t *testing.T) {
 	_, err := d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "x", Mode: "substring", Sources: []string{"messages", "bogus"},
 	})
-	if err == nil {
-		t.Fatal("expected error for unknown source name")
-	}
+	require.Error(t, err, "expected error for unknown source name")
 }
 
 func TestSearchContentRegexInvalid(t *testing.T) {
@@ -353,9 +293,7 @@ func TestSearchContentRegexInvalid(t *testing.T) {
 	_, err := d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: `(unclosed`, Mode: "regex", Sources: []string{"messages"},
 	})
-	if err == nil {
-		t.Fatal("expected error for invalid regex")
-	}
+	require.Error(t, err, "expected error for invalid regex")
 }
 
 func TestSearchContentFTS(t *testing.T) {
@@ -370,12 +308,9 @@ func TestSearchContentFTS(t *testing.T) {
 		Pattern: "optimize", Mode: "fts",
 		Sources: []string{"messages"}, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent fts: %v", err)
-	}
-	if len(got.Matches) != 1 || got.Matches[0].Location != "message" {
-		t.Fatalf("fts match = %+v, want 1 message", got.Matches)
-	}
+	require.NoError(t, err, "SearchContent fts")
+	require.Len(t, got.Matches, 1, "fts match")
+	assert.Equal(t, "message", got.Matches[0].Location, "fts match Location")
 }
 
 func TestSearchContentFTSInvalidQuery(t *testing.T) {
@@ -393,9 +328,8 @@ func TestSearchContentFTSInvalidQuery(t *testing.T) {
 		Sources: []string{"messages"}, Limit: 50,
 	})
 	var inputErr *SearchInputError
-	if !errors.As(err, &inputErr) {
-		t.Fatalf("malformed FTS query error = %v, want *SearchInputError", err)
-	}
+	require.True(t, errors.As(err, &inputErr),
+		"malformed FTS query error = %v, want *SearchInputError", err)
 }
 
 func TestSearchContentFTSUnavailable(t *testing.T) {
@@ -406,20 +340,16 @@ func TestSearchContentFTSUnavailable(t *testing.T) {
 	// Drop the FTS table so HasFTS reports unavailable; the FTS search must
 	// then fail with an internal (non-input) error rather than being
 	// misclassified as an invalid user query (HTTP 400).
-	if _, err := d.getWriter().Exec("DROP TABLE IF EXISTS messages_fts"); err != nil {
-		t.Fatalf("drop messages_fts: %v", err)
-	}
-	_, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	_, err := d.getWriter().Exec("DROP TABLE IF EXISTS messages_fts")
+	require.NoError(t, err, "drop messages_fts")
+	_, err = d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "x", Mode: "fts",
 		Sources: []string{"messages"}, Limit: 50,
 	})
-	if err == nil {
-		t.Fatal("expected error when FTS is unavailable")
-	}
+	require.Error(t, err, "expected error when FTS is unavailable")
 	var inputErr *SearchInputError
-	if errors.As(err, &inputErr) {
-		t.Errorf("FTS-unavailable misclassified as input error: %v", err)
-	}
+	assert.False(t, errors.As(err, &inputErr),
+		"FTS-unavailable misclassified as input error: %v", err)
 }
 
 func TestSearchContentExcludeSystem(t *testing.T) {
@@ -435,28 +365,20 @@ func TestSearchContentExcludeSystem(t *testing.T) {
 			Content: "ordinary message holding NEEDLE", IsSystem: true,
 			Timestamp: "2026-05-20T12:00:00Z"},
 	}
-	if err := d.ReplaceSessionMessages("s3", msgs); err != nil {
-		t.Fatalf("ReplaceSessionMessages: %v", err)
-	}
+	require.NoError(t, d.ReplaceSessionMessages("s3", msgs),
+		"ReplaceSessionMessages")
 	withSys, err := d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"}, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent with system: %v", err)
-	}
-	if len(withSys.Matches) != 1 {
-		t.Errorf("default should include system messages: got %d", len(withSys.Matches))
-	}
+	require.NoError(t, err, "SearchContent with system")
+	assert.Len(t, withSys.Matches, 1, "default should include system messages")
 	noSys, err := d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"},
 		ExcludeSystem: true, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent exclude system: %v", err)
-	}
-	if len(noSys.Matches) != 0 {
-		t.Errorf("ExcludeSystem should drop system messages: got %d", len(noSys.Matches))
-	}
+	require.NoError(t, err, "SearchContent exclude system")
+	assert.Empty(t, noSys.Matches,
+		"ExcludeSystem should drop system messages")
 }
 
 func TestSearchContentExcludesAutomatedByDefault(t *testing.T) {
@@ -475,28 +397,21 @@ func TestSearchContentExcludesAutomatedByDefault(t *testing.T) {
 		SessionID: "auto", Ordinal: 0, Role: "user",
 		Content: "automated NEEDLE run", Timestamp: "2026-05-20T12:00:00Z",
 	}}
-	if err := d.ReplaceSessionMessages("auto", msgs); err != nil {
-		t.Fatalf("ReplaceSessionMessages: %v", err)
-	}
+	require.NoError(t, d.ReplaceSessionMessages("auto", msgs),
+		"ReplaceSessionMessages")
 	def, err := d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"}, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent: %v", err)
-	}
-	if len(def.Matches) != 0 {
-		t.Errorf("automated session should be excluded by default: got %d", len(def.Matches))
-	}
+	require.NoError(t, err, "SearchContent")
+	assert.Empty(t, def.Matches,
+		"automated session should be excluded by default")
 	inc, err := d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"},
 		IncludeAutomated: true, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent include: %v", err)
-	}
-	if len(inc.Matches) != 1 {
-		t.Errorf("IncludeAutomated should include the session: got %d", len(inc.Matches))
-	}
+	require.NoError(t, err, "SearchContent include")
+	assert.Len(t, inc.Matches, 1,
+		"IncludeAutomated should include the session")
 }
 
 func TestSearchContentExcludesOneShotByDefault(t *testing.T) {
@@ -510,28 +425,21 @@ func TestSearchContentExcludesOneShotByDefault(t *testing.T) {
 		SessionID: "one", Ordinal: 0, Role: "user",
 		Content: "leaked NEEDLE token", Timestamp: "2026-05-20T12:00:00Z",
 	}}
-	if err := d.ReplaceSessionMessages("one", msgs); err != nil {
-		t.Fatalf("ReplaceSessionMessages: %v", err)
-	}
+	require.NoError(t, d.ReplaceSessionMessages("one", msgs),
+		"ReplaceSessionMessages")
 	def, err := d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"}, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent: %v", err)
-	}
-	if len(def.Matches) != 0 {
-		t.Errorf("one-shot session should be excluded by default: got %d", len(def.Matches))
-	}
+	require.NoError(t, err, "SearchContent")
+	assert.Empty(t, def.Matches,
+		"one-shot session should be excluded by default")
 	inc, err := d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"},
 		IncludeOneShot: true, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent include: %v", err)
-	}
-	if len(inc.Matches) != 1 {
-		t.Errorf("IncludeOneShot should include the session: got %d", len(inc.Matches))
-	}
+	require.NoError(t, err, "SearchContent include")
+	assert.Len(t, inc.Matches, 1,
+		"IncludeOneShot should include the session")
 }
 
 func TestSearchContentToolResultDedup(t *testing.T) {
@@ -555,22 +463,16 @@ func TestSearchContentToolResultDedup(t *testing.T) {
 			}},
 		}},
 	}}
-	if err := d.ReplaceSessionMessages("dup", msgs); err != nil {
-		t.Fatalf("ReplaceSessionMessages: %v", err)
-	}
+	require.NoError(t, d.ReplaceSessionMessages("dup", msgs),
+		"ReplaceSessionMessages")
 	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "DUPNEEDLE", Mode: "substring",
 		Sources: []string{"tool_result"}, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent: %v", err)
-	}
-	if len(got.Matches) != 1 {
-		t.Fatalf("canonical dedup: got %d matches, want 1: %+v", len(got.Matches), got.Matches)
-	}
-	if !contains(got.Matches[0].Snippet, "event") {
-		t.Errorf("expected the event content to win, got snippet %q", got.Matches[0].Snippet)
-	}
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, got.Matches, 1, "canonical dedup")
+	assert.Contains(t, got.Matches[0].Snippet, "event",
+		"expected the event content to win")
 }
 
 func TestSearchContentCursorPagination(t *testing.T) {
@@ -583,24 +485,16 @@ func TestSearchContentCursorPagination(t *testing.T) {
 	first, err := d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"}, Limit: 2,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent page1: %v", err)
-	}
-	if len(first.Matches) != 2 || first.NextCursor != 2 {
-		t.Fatalf("page1: got %d matches, cursor %d; want 2 and 2",
-			len(first.Matches), first.NextCursor)
-	}
+	require.NoError(t, err, "SearchContent page1")
+	require.Len(t, first.Matches, 2, "page1 matches")
+	require.Equal(t, 2, first.NextCursor, "page1 cursor")
 	second, err := d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"},
 		Limit: 2, Cursor: first.NextCursor,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent page2: %v", err)
-	}
-	if len(second.Matches) != 1 || second.NextCursor != 0 {
-		t.Fatalf("page2: got %d matches, cursor %d; want 1 and 0",
-			len(second.Matches), second.NextCursor)
-	}
+	require.NoError(t, err, "SearchContent page2")
+	require.Len(t, second.Matches, 1, "page2 matches")
+	require.Equal(t, 0, second.NextCursor, "page2 cursor")
 }
 
 func TestSearchContentMultiSourceWithProjectFilter(t *testing.T) {
@@ -619,25 +513,19 @@ func TestSearchContentMultiSourceWithProjectFilter(t *testing.T) {
 				InputJSON: `{"command":"FINDME"}`, ResultContent: "out FINDME",
 			}},
 		}}
-		if err := d.ReplaceSessionMessages(id, msgs); err != nil {
-			t.Fatalf("ReplaceSessionMessages %s: %v", id, err)
-		}
+		require.NoError(t, d.ReplaceSessionMessages(id, msgs),
+			"ReplaceSessionMessages %s", id)
 	}
 	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: "FINDME", Mode: "substring",
 		Sources: []string{"messages", "tool_input", "tool_result"},
 		Project: "alpha", Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent: %v", err)
-	}
-	if len(got.Matches) == 0 {
-		t.Fatal("expected matches in project alpha")
-	}
+	require.NoError(t, err, "SearchContent")
+	require.NotEmpty(t, got.Matches, "expected matches in project alpha")
 	for _, m := range got.Matches {
-		if m.SessionID != "a" || m.Project != "alpha" {
-			t.Errorf("project filter leaked match from %q (project %q)", m.SessionID, m.Project)
-		}
+		assert.Equal(t, "a", m.SessionID, "session leaked")
+		assert.Equal(t, "alpha", m.Project, "project leaked")
 	}
 }
 
@@ -655,16 +543,10 @@ func TestSnippetWindowRuneBoundaries(t *testing.T) {
 	// radius 3 lands mid-rune on both sides, so the partial padding runes are
 	// trimmed back to a boundary, leaving one whole rune of padding each side.
 	got := window(3)
-	if got != "éMATCHü" {
-		t.Errorf("mid-rune radius = %q, want éMATCHü", got)
-	}
+	assert.Equal(t, "éMATCHü", got, "mid-rune radius")
 	// radius 4 lands exactly on rune boundaries, so aligned padding is kept.
-	if aligned := window(4); aligned != "ééMATCHüü" {
-		t.Errorf("boundary-aligned radius = %q, want ééMATCHüü", aligned)
-	}
-	if !utf8.ValidString(got) {
-		t.Errorf("snippet not valid UTF-8: %q", got)
-	}
+	assert.Equal(t, "ééMATCHüü", window(4), "boundary-aligned radius")
+	assert.True(t, utf8.ValidString(got), "snippet not valid UTF-8: %q", got)
 }
 
 func TestFTSSnippetCentersOnPhrase(t *testing.T) {
@@ -676,16 +558,14 @@ func TestFTSSnippetCentersOnPhrase(t *testing.T) {
 
 	t.Run("phrase present centers on phrase", func(t *testing.T) {
 		f := ContentSearchFilter{Pattern: `"error handler"`, Mode: "fts"}
-		if snip := f.ftsSnippet(body); !strings.Contains(snip, "error handler") {
-			t.Errorf("snippet did not center on the phrase: %q", snip)
-		}
+		assert.Contains(t, f.ftsSnippet(body), "error handler",
+			"snippet did not center on the phrase")
 	})
 	t.Run("phrase absent falls back to first token", func(t *testing.T) {
 		// No contiguous "error handler" substring, so centering falls back to
 		// the first token "error", windowing its early occurrence.
 		f := ContentSearchFilter{Pattern: `"error nonexistent"`, Mode: "fts"}
-		if snip := f.ftsSnippet(body); !strings.Contains(snip, "error in the early") {
-			t.Errorf("fallback snippet not centered on first token: %q", snip)
-		}
+		assert.Contains(t, f.ftsSnippet(body), "error in the early",
+			"fallback snippet not centered on first token")
 	})
 }

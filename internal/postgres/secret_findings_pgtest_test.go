@@ -6,6 +6,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -24,27 +27,18 @@ func seedSecretFindingsSession(
 	t.Helper()
 	pg := store.DB()
 
-	if _, err := pg.Exec(
-		`DELETE FROM secret_findings WHERE session_id = $1`, sid,
-	); err != nil {
-		t.Fatalf("delete secret_findings: %v", err)
-	}
-	if _, err := pg.Exec(
-		`DELETE FROM messages WHERE session_id = $1`, sid,
-	); err != nil {
-		t.Fatalf("delete messages: %v", err)
-	}
-	if _, err := pg.Exec(
-		`DELETE FROM sessions WHERE id = $1`, sid,
-	); err != nil {
-		t.Fatalf("delete session: %v", err)
-	}
+	_, err := pg.Exec(`DELETE FROM secret_findings WHERE session_id = $1`, sid)
+	require.NoError(t, err, "delete secret_findings")
+	_, err = pg.Exec(`DELETE FROM messages WHERE session_id = $1`, sid)
+	require.NoError(t, err, "delete messages")
+	_, err = pg.Exec(`DELETE FROM sessions WHERE id = $1`, sid)
+	require.NoError(t, err, "delete session")
 
 	var saVal interface{} = nil
 	if startedAt != "" {
 		saVal = startedAt
 	}
-	if _, err := pg.Exec(`
+	_, err = pg.Exec(`
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, message_count, user_message_count,
@@ -53,23 +47,21 @@ func seedSecretFindingsSession(
 			$4::timestamptz, $5, 0, $6)`,
 		sid, project, agent, saVal,
 		len(msgs)+1, len(findings),
-	); err != nil {
-		t.Fatalf("insert session %s: %v", sid, err)
-	}
+	)
+	require.NoError(t, err, "insert session %s", sid)
 
 	for _, m := range msgs {
-		if _, err := pg.Exec(`
+		_, err := pg.Exec(`
 			INSERT INTO messages
 				(session_id, ordinal, role, content, content_length)
 			VALUES ($1, $2, $3, $4, $5)`,
 			sid, m.ordinal, m.role, m.content, len(m.content),
-		); err != nil {
-			t.Fatalf("insert message ord=%d: %v", m.ordinal, err)
-		}
+		)
+		require.NoError(t, err, "insert message ord=%d", m.ordinal)
 	}
 
 	for _, f := range findings {
-		if _, err := pg.Exec(`
+		_, err := pg.Exec(`
 			INSERT INTO secret_findings
 				(session_id, rule_name, confidence, location_kind,
 				 message_ordinal, call_index, event_index,
@@ -80,9 +72,8 @@ func seedSecretFindingsSession(
 			f.MessageOrdinal, f.CallIndex, f.EventIndex,
 			f.MatchStart, f.MatchEnd, f.MatchIndex,
 			f.RedactedMatch, f.RulesVersion,
-		); err != nil {
-			t.Fatalf("insert finding: %v", err)
-		}
+		)
+		require.NoError(t, err, "insert finding")
 	}
 }
 
@@ -91,9 +82,7 @@ func TestPGListSecretFindings(t *testing.T) {
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(pgURL, testSchema, true)
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
+	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	ctx := context.Background()
@@ -123,45 +112,30 @@ func TestPGListSecretFindings(t *testing.T) {
 
 	// All findings.
 	all, err := store.ListSecretFindings(ctx, db.SecretFindingFilter{Limit: 50})
-	if err != nil {
-		t.Fatalf("ListSecretFindings all: %v", err)
-	}
+	require.NoError(t, err, "ListSecretFindings all")
 	// At least 2 findings (may be more from other tests).
 	foundS1, foundS2 := false, false
 	for _, f := range all.Findings {
 		if f.SessionID == "sf-s1" {
 			foundS1 = true
-			if f.Project != "alpha-proj" {
-				t.Errorf("sf-s1 Project = %q, want alpha-proj", f.Project)
-			}
-			if f.Agent != "claude-code" {
-				t.Errorf("sf-s1 Agent = %q, want claude-code", f.Agent)
-			}
+			assert.Equal(t, "alpha-proj", f.Project, "sf-s1 Project")
+			assert.Equal(t, "claude-code", f.Agent, "sf-s1 Agent")
 		}
 		if f.SessionID == "sf-s2" {
 			foundS2 = true
-			if f.Project != "beta-proj" {
-				t.Errorf("sf-s2 Project = %q, want beta-proj", f.Project)
-			}
-			if f.Agent != "codex" {
-				t.Errorf("sf-s2 Agent = %q, want codex", f.Agent)
-			}
+			assert.Equal(t, "beta-proj", f.Project, "sf-s2 Project")
+			assert.Equal(t, "codex", f.Agent, "sf-s2 Agent")
 		}
 	}
-	if !foundS1 || !foundS2 {
-		t.Errorf("foundS1=%v foundS2=%v; both must be present", foundS1, foundS2)
-	}
+	assert.True(t, foundS1 && foundS2,
+		"foundS1=%v foundS2=%v; both must be present", foundS1, foundS2)
 
 	// Project filter.
 	alpha, err := store.ListSecretFindings(ctx,
 		db.SecretFindingFilter{Project: "alpha-proj", Limit: 50})
-	if err != nil {
-		t.Fatalf("ListSecretFindings project filter: %v", err)
-	}
+	require.NoError(t, err, "ListSecretFindings project filter")
 	for _, f := range alpha.Findings {
-		if f.Project != "alpha-proj" {
-			t.Errorf("project filter leak: got project %q", f.Project)
-		}
+		assert.Equal(t, "alpha-proj", f.Project, "project filter leak")
 	}
 	found := false
 	for _, f := range alpha.Findings {
@@ -169,45 +143,31 @@ func TestPGListSecretFindings(t *testing.T) {
 			found = true
 		}
 	}
-	if !found {
-		t.Errorf("sf-s1 not found in project filter results")
-	}
+	assert.True(t, found, "sf-s1 not found in project filter results")
 
 	// Agent filter.
 	codex, err := store.ListSecretFindings(ctx,
 		db.SecretFindingFilter{Agent: "codex", Limit: 50})
-	if err != nil {
-		t.Fatalf("ListSecretFindings agent filter: %v", err)
-	}
+	require.NoError(t, err, "ListSecretFindings agent filter")
 	for _, f := range codex.Findings {
-		if f.Agent != "codex" {
-			t.Errorf("agent filter leak: got agent %q", f.Agent)
-		}
+		assert.Equal(t, "codex", f.Agent, "agent filter leak")
 	}
 
 	// Confidence filter: definite.
 	def, err := store.ListSecretFindings(ctx,
 		db.SecretFindingFilter{Confidence: "definite", Limit: 50})
-	if err != nil {
-		t.Fatalf("ListSecretFindings confidence filter: %v", err)
-	}
+	require.NoError(t, err, "ListSecretFindings confidence filter")
 	for _, f := range def.Findings {
-		if f.Confidence != "definite" {
-			t.Errorf("confidence filter leak: got %q", f.Confidence)
-		}
+		assert.Equal(t, "definite", f.Confidence, "confidence filter leak")
 	}
 
 	// Rules-version filter.
 	current, err := store.ListSecretFindings(ctx,
 		db.SecretFindingFilter{RulesVersions: []string{"v1"}, Limit: 50})
-	if err != nil {
-		t.Fatalf("ListSecretFindings rules version filter: %v", err)
-	}
+	require.NoError(t, err, "ListSecretFindings rules version filter")
 	foundS1, foundS2 = false, false
 	for _, f := range current.Findings {
-		if f.RulesVersion != "v1" {
-			t.Errorf("rules version filter leak: got %q", f.RulesVersion)
-		}
+		assert.Equal(t, "v1", f.RulesVersion, "rules version filter leak")
 		if f.SessionID == "sf-s1" {
 			foundS1 = true
 		}
@@ -215,30 +175,22 @@ func TestPGListSecretFindings(t *testing.T) {
 			foundS2 = true
 		}
 	}
-	if !foundS1 || !foundS2 {
-		t.Errorf("rules version filter foundS1=%v foundS2=%v", foundS1, foundS2)
-	}
+	assert.True(t, foundS1 && foundS2,
+		"rules version filter foundS1=%v foundS2=%v", foundS1, foundS2)
 	stale, err := store.ListSecretFindings(ctx,
 		db.SecretFindingFilter{RulesVersions: []string{"v2"}, Limit: 50})
-	if err != nil {
-		t.Fatalf("ListSecretFindings stale rules version filter: %v", err)
-	}
+	require.NoError(t, err, "ListSecretFindings stale rules version filter")
 	for _, f := range stale.Findings {
-		if f.SessionID == "sf-s1" || f.SessionID == "sf-s2" {
-			t.Errorf("stale rules version filter returned %s", f.SessionID)
-		}
+		assert.NotContains(t, []string{"sf-s1", "sf-s2"}, f.SessionID,
+			"stale rules version filter returned %s", f.SessionID)
 	}
 
 	// Rule filter.
 	jwt, err := store.ListSecretFindings(ctx,
 		db.SecretFindingFilter{Rule: "jwt", Limit: 50})
-	if err != nil {
-		t.Fatalf("ListSecretFindings rule filter: %v", err)
-	}
+	require.NoError(t, err, "ListSecretFindings rule filter")
 	for _, f := range jwt.Findings {
-		if f.RuleName != "jwt" {
-			t.Errorf("rule filter leak: got %q", f.RuleName)
-		}
+		assert.Equal(t, "jwt", f.RuleName, "rule filter leak")
 	}
 }
 
@@ -247,9 +199,7 @@ func TestPGListSecretFindingsPagination(t *testing.T) {
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(pgURL, testSchema, true)
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
+	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	ctx := context.Background()
@@ -278,27 +228,21 @@ func TestPGListSecretFindingsPagination(t *testing.T) {
 				Rule:  "pg-pagination-test",
 				Limit: 2, Cursor: cursor,
 			})
-		if err != nil {
-			t.Fatalf("page at cursor %d: %v", cursor, err)
-		}
+		require.NoError(t, err, "page at cursor %d", cursor)
 		for _, f := range page.Findings {
 			seen[f.MatchStart]++
 		}
-		if pages++; pages > 10 {
-			t.Fatal("pagination did not terminate")
-		}
+		pages++
+		require.LessOrEqual(t, pages, 10, "pagination did not terminate")
 		if page.NextCursor == 0 {
 			break
 		}
 		cursor = page.NextCursor
 	}
-	if len(seen) != 5 {
-		t.Fatalf("saw %d distinct findings across pages, want 5", len(seen))
-	}
+	require.Len(t, seen, 5, "distinct findings across pages")
 	for start, n := range seen {
-		if n != 1 {
-			t.Errorf("finding at MatchStart=%d seen %d times, want 1", start, n)
-		}
+		assert.Equal(t, 1, n,
+			"finding at MatchStart=%d seen %d times", start, n)
 	}
 }
 
@@ -307,9 +251,7 @@ func TestPGListSecretFindingsDateFilter(t *testing.T) {
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(pgURL, testSchema, true)
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
+	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	ctx := context.Background()
@@ -342,12 +284,8 @@ func TestPGListSecretFindingsDateFilter(t *testing.T) {
 		db.SecretFindingFilter{
 			Rule: "df-rule", DateFrom: "2000-01-01", Limit: 50,
 		})
-	if err != nil {
-		t.Fatalf("wide: %v", err)
-	}
-	if len(wide.Findings) != 2 {
-		t.Fatalf("wide = %d findings, want 2", len(wide.Findings))
-	}
+	require.NoError(t, err, "wide")
+	require.Len(t, wide.Findings, 2)
 
 	// March-only range.
 	mar, err := store.ListSecretFindings(ctx,
@@ -356,12 +294,9 @@ func TestPGListSecretFindingsDateFilter(t *testing.T) {
 			DateFrom: "2026-03-01", DateTo: "2026-03-31",
 			Limit: 50,
 		})
-	if err != nil {
-		t.Fatalf("march: %v", err)
-	}
-	if len(mar.Findings) != 1 || mar.Findings[0].SessionID != "sf-date-mar" {
-		t.Fatalf("march filter = %+v, want only sf-date-mar", mar.Findings)
-	}
+	require.NoError(t, err, "march")
+	require.Len(t, mar.Findings, 1)
+	assert.Equal(t, "sf-date-mar", mar.Findings[0].SessionID)
 }
 
 func TestPGSecretFindingSource(t *testing.T) {
@@ -369,9 +304,7 @@ func TestPGSecretFindingSource(t *testing.T) {
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(pgURL, testSchema, true)
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
+	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	pg := store.DB()
@@ -383,68 +316,57 @@ func TestPGSecretFindingSource(t *testing.T) {
 		"secret_findings", "tool_result_events",
 		"tool_calls", "messages",
 	} {
-		if _, err := pg.Exec(
-			"DELETE FROM "+tbl+" WHERE session_id = $1", sid,
-		); err != nil {
-			t.Fatalf("cleanup %s: %v", tbl, err)
-		}
+		_, err := pg.Exec("DELETE FROM "+tbl+" WHERE session_id = $1", sid)
+		require.NoError(t, err, "cleanup %s", tbl)
 	}
-	if _, err := pg.Exec(
-		"DELETE FROM sessions WHERE id = $1", sid,
-	); err != nil {
-		t.Fatalf("cleanup sessions: %v", err)
-	}
+	_, err = pg.Exec("DELETE FROM sessions WHERE id = $1", sid)
+	require.NoError(t, err, "cleanup sessions")
 
-	if _, err := pg.Exec(`
+	_, err = pg.Exec(`
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, message_count, user_message_count)
 		VALUES ($1, 'test-machine', 'src-proj', 'claude-code',
 			'test', '2026-05-01T00:00:00Z'::timestamptz, 1, 0)`,
 		sid,
-	); err != nil {
-		t.Fatalf("insert session: %v", err)
-	}
-	if _, err := pg.Exec(`
+	)
+	require.NoError(t, err, "insert session")
+	_, err = pg.Exec(`
 		INSERT INTO messages
 			(session_id, ordinal, role, content, content_length)
 		VALUES ($1, 0, 'assistant',
 			'key AKIA7QHWN2DKR4FYPLJM here', 28)`,
 		sid,
-	); err != nil {
-		t.Fatalf("insert message: %v", err)
-	}
+	)
+	require.NoError(t, err, "insert message")
 	// Insert a tool_call at call_index=0 with result_content.
-	if _, err := pg.Exec(`
+	_, err = pg.Exec(`
 		INSERT INTO tool_calls
 			(session_id, message_ordinal, call_index, tool_name, category,
 			 tool_use_id, input_json, result_content)
 		VALUES ($1, 0, 0, 'Bash', 'Bash', 'tu0',
 			'{"command":"printenv"}', 'AWS_SECRET=topsecretvalue123')`,
 		sid,
-	); err != nil {
-		t.Fatalf("insert tool_call: %v", err)
-	}
+	)
+	require.NoError(t, err, "insert tool_call")
 	// Insert a tool_call at call_index=1 with a result event.
-	if _, err := pg.Exec(`
+	_, err = pg.Exec(`
 		INSERT INTO tool_calls
 			(session_id, message_ordinal, call_index, tool_name, category,
 			 tool_use_id)
 		VALUES ($1, 0, 1, 'Bash', 'Bash', 'tu1')`,
 		sid,
-	); err != nil {
-		t.Fatalf("insert tool_call 2: %v", err)
-	}
-	if _, err := pg.Exec(`
+	)
+	require.NoError(t, err, "insert tool_call 2")
+	_, err = pg.Exec(`
 		INSERT INTO tool_result_events
 			(session_id, tool_call_message_ordinal, call_index,
 			 tool_use_id, source, status, content, event_index)
 		VALUES ($1, 0, 1, 'tu1', 'stdout', 'ok',
 			'event-secret-value', 0)`,
 		sid,
-	); err != nil {
-		t.Fatalf("insert tool_result_event: %v", err)
-	}
+	)
+	require.NoError(t, err, "insert tool_result_event")
 
 	cases := []struct {
 		name string
@@ -485,13 +407,9 @@ func TestPGSecretFindingSource(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got, ok, err := store.SecretFindingSource(ctx, tc.f)
-			if err != nil {
-				t.Fatalf("SecretFindingSource: %v", err)
-			}
-			if ok != tc.ok || got != tc.want {
-				t.Errorf("got (%q, %v), want (%q, %v)",
-					got, ok, tc.want, tc.ok)
-			}
+			require.NoError(t, err, "SecretFindingSource")
+			assert.Equal(t, tc.ok, ok)
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }

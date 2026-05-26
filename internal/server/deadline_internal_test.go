@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -20,9 +22,7 @@ func TestHandlers_Internal_DeadlineExceeded(t *testing.T) {
 		Project:   "test-proj",
 		StartedAt: &started,
 	}
-	if err := s.db.UpsertSession(sess); err != nil {
-		t.Fatalf("seeding session: %v", err)
-	}
+	require.NoError(t, s.db.UpsertSession(sess))
 
 	tests := []struct {
 		name        string
