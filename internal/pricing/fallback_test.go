@@ -1,6 +1,11 @@
 package pricing
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
 
 func TestFallbackPricing_Opus46Rates(t *testing.T) {
 	prices := FallbackPricing()
@@ -11,9 +16,7 @@ func TestFallbackPricing_Opus46Rates(t *testing.T) {
 			break
 		}
 	}
-	if got == nil {
-		t.Fatal("claude-opus-4-6 entry missing from FallbackPricing")
-	}
+	require.NotNil(t, got, "claude-opus-4-6 entry missing from FallbackPricing")
 
 	// Source: https://claude.com/pricing — Opus 4.5/4.6 tier.
 	want := ModelPricing{
@@ -23,7 +26,5 @@ func TestFallbackPricing_Opus46Rates(t *testing.T) {
 		CacheCreationPerMTok: 6.25,
 		CacheReadPerMTok:     0.50,
 	}
-	if *got != want {
-		t.Errorf("claude-opus-4-6 pricing = %+v, want %+v", *got, want)
-	}
+	assert.Equal(t, want, *got)
 }

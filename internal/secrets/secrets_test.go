@@ -4,57 +4,38 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestScanFindsAWSAccessKey(t *testing.T) {
 	text := "export AWS_KEY=AKIA7QHWN2DKR4FYPLJM then continue"
 	got := Scan(text)
-	if len(got) != 1 {
-		t.Fatalf("Scan returned %d matches, want 1: %+v", len(got), got)
-	}
+	require.Len(t, got, 1)
 	m := got[0]
-	if m.Rule != "aws-access-key" {
-		t.Errorf("Rule = %q, want aws-access-key", m.Rule)
-	}
-	if m.Confidence != ConfidenceDefinite {
-		t.Errorf("Confidence = %q, want definite", m.Confidence)
-	}
-	if text[m.Start:m.End] != "AKIA7QHWN2DKR4FYPLJM" {
-		t.Errorf("span = %q, want AKIA7QHWN2DKR4FYPLJM", text[m.Start:m.End])
-	}
-	if m.Index != 0 {
-		t.Errorf("Index = %d, want 0", m.Index)
-	}
+	assert.Equal(t, "aws-access-key", m.Rule)
+	assert.Equal(t, ConfidenceDefinite, m.Confidence)
+	assert.Equal(t, "AKIA7QHWN2DKR4FYPLJM", text[m.Start:m.End])
+	assert.Equal(t, 0, m.Index)
 }
 
 func TestScanNoMatch(t *testing.T) {
-	if got := Scan("just some ordinary prose with no secrets"); len(got) != 0 {
-		t.Fatalf("Scan returned %d matches, want 0: %+v", len(got), got)
-	}
+	assert.Empty(t, Scan("just some ordinary prose with no secrets"))
 }
 
 func TestRedactMasksSecretButKeepsContext(t *testing.T) {
 	text := "export AWS_KEY=AKIA7QHWN2DKR4FYPLJM then continue"
 	got := Redact(text)
-	if strings.Contains(got, "AKIA7QHWN2DKR4FYPLJM") {
-		t.Fatalf("Redact leaked the full secret: %q", got)
-	}
-	if !strings.HasPrefix(got, "export AWS_KEY=") {
-		t.Errorf("Redact dropped surrounding context: %q", got)
-	}
-	if !strings.HasSuffix(got, " then continue") {
-		t.Errorf("Redact dropped trailing context: %q", got)
-	}
-	if !strings.Contains(got, "AKIA…PLJM") {
-		t.Errorf("Redact did not use the masked form: %q", got)
-	}
+	assert.NotContains(t, got, "AKIA7QHWN2DKR4FYPLJM", "Redact leaked the full secret")
+	assert.True(t, strings.HasPrefix(got, "export AWS_KEY="), "Redact dropped surrounding context: %q", got)
+	assert.True(t, strings.HasSuffix(got, " then continue"), "Redact dropped trailing context: %q", got)
+	assert.Contains(t, got, "AKIA…PLJM", "Redact did not use the masked form")
 }
 
 func TestRedactNoMatchReturnsInput(t *testing.T) {
 	in := "nothing to see here"
-	if got := Redact(in); got != in {
-		t.Fatalf("Redact mutated clean text: %q", got)
-	}
+	assert.Equal(t, in, Redact(in))
 }
 
 func TestScanSuppressesCandidateOverlappingDefinite(t *testing.T) {
@@ -63,21 +44,16 @@ func TestScanSuppressesCandidateOverlappingDefinite(t *testing.T) {
 	text := "https://user:sk-ant-api03-Xa9Kd03Lm5Qp7Rt2Vw8Zb4@example.com"
 	got := Scan(text)
 	for _, m := range got {
-		if m.Confidence == ConfidenceCandidate {
-			t.Errorf("candidate %q not suppressed despite overlapping definite", m.Rule)
-		}
+		assert.NotEqual(t, ConfidenceCandidate, m.Confidence,
+			"candidate %q not suppressed despite overlapping definite", m.Rule)
 	}
-	if len(got) == 0 {
-		t.Fatal("expected at least the definite anthropic-key finding")
-	}
+	require.NotEmpty(t, got, "expected at least the definite anthropic-key finding")
 }
 
 func TestRedactMasksUnionIncludingCandidate(t *testing.T) {
 	text := "TOKEN=sk-ant-api03-Nc6Mp1Hj9Bg3Tf5Ds8Lr0E end"
 	got := Redact(text)
-	if strings.Contains(got, "sk-ant-api03-Nc6Mp1Hj9Bg3Tf5Ds8Lr0E") {
-		t.Fatalf("Redact leaked secret: %q", got)
-	}
+	assert.NotContains(t, got, "sk-ant-api03-Nc6Mp1Hj9Bg3Tf5Ds8Lr0E", "Redact leaked secret")
 }
 
 // TestRedactWindowMasksStraddlingSecret pins the content-search guarantee: a
@@ -94,17 +70,13 @@ func TestRedactWindowMasksStraddlingSecret(t *testing.T) {
 
 	// Hazard check: redacting the bare window leaks, because the fragment has
 	// no END line for the private-key-block rule to anchor on.
-	if naive := Redact(full[lo:hi]); !strings.Contains(naive, "BEGIN RSA PRIVATE KEY") {
-		t.Fatalf("precondition: window should straddle the key; got %q", naive)
-	}
+	naive := Redact(full[lo:hi])
+	require.Contains(t, naive, "BEGIN RSA PRIVATE KEY",
+		"precondition: window should straddle the key")
 
 	got := RedactWindow(full, lo, hi)
-	if strings.Contains(got, "SECRETKEYMATERIAL") {
-		t.Errorf("RedactWindow leaked straddling key material: %q", got)
-	}
-	if !strings.Contains(got, "[redacted private key block]") {
-		t.Errorf("RedactWindow did not mask the key block: %q", got)
-	}
+	assert.NotContains(t, got, "SECRETKEYMATERIAL", "RedactWindow leaked straddling key material")
+	assert.Contains(t, got, "[redacted private key block]", "RedactWindow did not mask the key block")
 }
 
 // TestRedactWindowMasksStraddlingGroupedSecret covers grouped rules, whose
@@ -119,9 +91,7 @@ func TestRedactWindowMasksStraddlingGroupedSecret(t *testing.T) {
 		vs := strings.Index(full, val)
 		// Window starts inside the value, past the "api_key=" the rule needs.
 		got := RedactWindow(full, vs+5, vs+15)
-		if strings.Contains(got, val[5:20]) {
-			t.Errorf("leaked high-entropy value fragment: %q", got)
-		}
+		assert.NotContains(t, got, val[5:20], "leaked high-entropy value fragment")
 	})
 	t.Run("basic-auth-url", func(t *testing.T) {
 		pw := "Sup3rSecretP4ssw0rd"
@@ -129,9 +99,7 @@ func TestRedactWindowMasksStraddlingGroupedSecret(t *testing.T) {
 		ps := strings.Index(full, pw)
 		// Window lands inside the password, past the "://user:" the rule needs.
 		got := RedactWindow(full, ps+2, ps+8)
-		if strings.Contains(got, pw[2:12]) {
-			t.Errorf("leaked basic-auth password fragment: %q", got)
-		}
+		assert.NotContains(t, got, pw[2:12], "leaked basic-auth password fragment")
 	})
 }
 
@@ -141,16 +109,11 @@ func TestRedactWindowMasksStraddlingGroupedSecret(t *testing.T) {
 func TestRedactWindowKeepsContextAndContainedSecrets(t *testing.T) {
 	full := "the key is AKIA7QHWN2DKR4FYPLJM in config"
 	got := RedactWindow(full, 0, len(full))
-	if strings.Contains(got, "AKIA7QHWN2DKR4FYPLJM") {
-		t.Errorf("contained secret not masked: %q", got)
-	}
-	if !strings.Contains(got, "the key is ") || !strings.Contains(got, " in config") {
-		t.Errorf("context not preserved: %q", got)
-	}
+	assert.NotContains(t, got, "AKIA7QHWN2DKR4FYPLJM", "contained secret not masked")
+	assert.Contains(t, got, "the key is ", "context not preserved")
+	assert.Contains(t, got, " in config", "context not preserved")
 	clean := "just some ordinary prose with no secrets at all"
-	if got := RedactWindow(clean, 0, len(clean)); got != clean {
-		t.Errorf("clean window altered: %q", got)
-	}
+	assert.Equal(t, clean, RedactWindow(clean, 0, len(clean)))
 }
 
 func TestRedactNeverLeaksKnownSecrets(t *testing.T) {
@@ -169,9 +132,8 @@ func TestRedactNeverLeaksKnownSecrets(t *testing.T) {
 		for _, tmpl := range []string{"%s", "prefix %s suffix", "a=%s\nb=2"} {
 			text := fmt.Sprintf(tmpl, sec)
 			out := Redact(text)
-			if strings.Contains(out, sec) {
-				t.Errorf("Redact leaked %q in template %q -> %q", sec, tmpl, out)
-			}
+			assert.NotContains(t, out, sec,
+				"Redact leaked %q in template %q -> %q", sec, tmpl, out)
 		}
 	}
 }
@@ -199,9 +161,8 @@ func TestScanRedactedNeverEqualsFullSecret(t *testing.T) {
 		}
 		for _, m := range matches {
 			full := text[m.Start:m.End]
-			if m.Redacted == full {
-				t.Errorf("Redacted equals full secret for rule %q: %q", m.Rule, full)
-			}
+			assert.NotEqual(t, full, m.Redacted,
+				"Redacted equals full secret for rule %q: %q", m.Rule, full)
 		}
 	}
 }
@@ -214,22 +175,15 @@ func TestBasicAuthURLDetectsPasswordSpan(t *testing.T) {
 			m = &got
 		}
 	}
-	if m == nil {
-		t.Fatalf("expected a basic-auth-url candidate; got %+v", Scan(text))
-	}
-	if span := text[m.Start:m.End]; span != "Sup3rSecretPw" {
-		t.Errorf("span = %q, want only the password Sup3rSecretPw", span)
-	}
-	if m.Confidence != ConfidenceCandidate {
-		t.Errorf("Confidence = %q, want candidate", m.Confidence)
-	}
+	require.NotNil(t, m, "expected a basic-auth-url candidate; got %+v", Scan(text))
+	assert.Equal(t, "Sup3rSecretPw", text[m.Start:m.End])
+	assert.Equal(t, ConfidenceCandidate, m.Confidence)
 	red := Redact(text)
 	// Assert the exact fully-masked form: no password character survives
 	// (this fails if the mask is loosened to reveal a suffix) while the
 	// surrounding URL context is preserved.
-	if !strings.Contains(red, "postgres://admin:…@db.example.com") {
-		t.Errorf("Redact did not fully mask the password in context: %q", red)
-	}
+	assert.Contains(t, red, "postgres://admin:…@db.example.com",
+		"Redact did not fully mask the password in context")
 }
 
 func TestScanJWTNotDuplicatedAsHighEntropy(t *testing.T) {
@@ -237,14 +191,11 @@ func TestScanJWTNotDuplicatedAsHighEntropy(t *testing.T) {
 	got := Scan("auth: " + jwt)
 	foundJWT := false
 	for _, m := range got {
-		if m.Rule == "high-entropy-assignment" {
-			t.Errorf("JWT segment reported as high-entropy-assignment: %+v", got)
-		}
+		assert.NotEqual(t, "high-entropy-assignment", m.Rule,
+			"JWT segment reported as high-entropy-assignment: %+v", got)
 		if m.Rule == "jwt" {
 			foundJWT = true
 		}
 	}
-	if !foundJWT {
-		t.Errorf("expected a jwt candidate; got %+v", got)
-	}
+	assert.True(t, foundJWT, "expected a jwt candidate; got %+v", got)
 }
