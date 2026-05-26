@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"go.kenn.io/agentsview/internal/config"
 )
 
@@ -15,10 +17,7 @@ func TestHandleScanSecretsReadOnly(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:1234"
 	w := httptest.NewRecorder()
 	srv.handleScanSecrets(w, req)
-	if w.Code != http.StatusNotImplemented {
-		t.Errorf("status = %d, want %d: %s",
-			w.Code, http.StatusNotImplemented, w.Body.String())
-	}
+	assert.Equal(t, http.StatusNotImplemented, w.Code, "body: %s", w.Body.String())
 }
 
 // TestHandleListSecretsRevealGate verifies the endpoint rejects reveal from a
@@ -55,10 +54,7 @@ func TestHandleListSecretsRevealGate(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 			srv.handleListSecrets(w, req)
-			if w.Code != tt.wantStatus {
-				t.Errorf("status = %d, want %d: %s",
-					w.Code, tt.wantStatus, w.Body.String())
-			}
+			assert.Equal(t, tt.wantStatus, w.Code, "body: %s", w.Body.String())
 		})
 	}
 }

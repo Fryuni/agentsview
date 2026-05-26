@@ -6,6 +6,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -26,11 +29,7 @@ func TestValidateSort(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := validateSort(tt.sortParam)
-			if got != tt.wantSort {
-				t.Errorf("validateSort(%q) = %q, want %q",
-					tt.sortParam, got, tt.wantSort)
-			}
+			assert.Equal(t, tt.wantSort, validateSort(tt.sortParam))
 		})
 	}
 }
@@ -52,10 +51,7 @@ func TestPrepareFTSQuery(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := prepareFTSQuery(tt.raw)
-			if got != tt.want {
-				t.Errorf("prepareFTSQuery(%q) = %q, want %q", tt.raw, got, tt.want)
-			}
+			assert.Equal(t, tt.want, prepareFTSQuery(tt.raw))
 		})
 	}
 }
@@ -100,14 +96,8 @@ func TestHandleSearchSortParam(t *testing.T) {
 			)
 			w := httptest.NewRecorder()
 			srv.handleSearch(w, req)
-			if w.Code != http.StatusOK {
-				t.Fatalf("status = %d, want 200: %s",
-					w.Code, w.Body.String())
-			}
-			if spy.filter.Sort != tt.wantSort {
-				t.Errorf("SearchFilter.Sort = %q, want %q",
-					spy.filter.Sort, tt.wantSort)
-			}
+			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+			assert.Equal(t, tt.wantSort, spy.filter.Sort)
 		})
 	}
 }

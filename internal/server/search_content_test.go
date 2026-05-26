@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"go.kenn.io/agentsview/internal/config"
 )
 
@@ -42,10 +44,7 @@ func TestHandleSearchContentInvalidParams(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 			srv.handleSearchContent(w, req)
-			if w.Code != tt.wantStatus {
-				t.Errorf("status = %d, want %d: %s",
-					w.Code, tt.wantStatus, w.Body.String())
-			}
+			assert.Equal(t, tt.wantStatus, w.Code, "body: %s", w.Body.String())
 		})
 	}
 }
@@ -78,9 +77,7 @@ func TestIsLocalhostRequest(t *testing.T) {
 			if tt.header != "" {
 				req.Header.Set(tt.header, tt.value)
 			}
-			if got := isLocalhostRequest(req); got != tt.want {
-				t.Errorf("isLocalhostRequest = %v, want %v", got, tt.want)
-			}
+			assert.Equal(t, tt.want, isLocalhostRequest(req))
 		})
 	}
 }
