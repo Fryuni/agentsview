@@ -6,6 +6,9 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const schemaTestSchema = "agentsview_schema_test"
@@ -13,9 +16,7 @@ const schemaTestSchema = "agentsview_schema_test"
 func cleanSchemaTestPG(t *testing.T, pgURL string) {
 	t.Helper()
 	pg, err := sql.Open("pgx", pgURL)
-	if err != nil {
-		t.Fatalf("connecting to pg: %v", err)
-	}
+	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 	_, _ = pg.Exec(
 		"DROP SCHEMA IF EXISTS " + schemaTestSchema + " CASCADE",
@@ -32,20 +33,16 @@ func TestSecretFindingsSchema(t *testing.T) {
 	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(pgURL, schemaTestSchema, true)
-	if err != nil {
-		t.Fatalf("connecting to pg: %v", err)
-	}
+	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 
 	ctx := context.Background()
 
 	// Run EnsureSchema twice to verify idempotency.
-	if err := EnsureSchema(ctx, pg, schemaTestSchema); err != nil {
-		t.Fatalf("EnsureSchema (first): %v", err)
-	}
-	if err := EnsureSchema(ctx, pg, schemaTestSchema); err != nil {
-		t.Fatalf("EnsureSchema (second, idempotency check): %v", err)
-	}
+	require.NoError(t, EnsureSchema(ctx, pg, schemaTestSchema),
+		"EnsureSchema (first)")
+	require.NoError(t, EnsureSchema(ctx, pg, schemaTestSchema),
+		"EnsureSchema (second, idempotency check)")
 
 	// Verify secret_findings table exists.
 	var tableExists bool
@@ -55,12 +52,8 @@ func TestSecretFindingsSchema(t *testing.T) {
 			WHERE table_schema = $1
 			  AND table_name = 'secret_findings'
 		)`, schemaTestSchema).Scan(&tableExists)
-	if err != nil {
-		t.Fatalf("checking secret_findings table: %v", err)
-	}
-	if !tableExists {
-		t.Fatal("secret_findings table does not exist")
-	}
+	require.NoError(t, err, "checking secret_findings table")
+	require.True(t, tableExists, "secret_findings table does not exist")
 
 	// Verify all required columns on secret_findings.
 	requiredFindingsCols := []string{
@@ -79,16 +72,8 @@ func TestSecretFindingsSchema(t *testing.T) {
 				  AND table_name = 'secret_findings'
 				  AND column_name = $2
 			)`, schemaTestSchema, col).Scan(&exists)
-		if err != nil {
-			t.Fatalf(
-				"checking secret_findings.%s: %v", col, err,
-			)
-		}
-		if !exists {
-			t.Errorf(
-				"secret_findings.%s column missing", col,
-			)
-		}
+		require.NoError(t, err, "checking secret_findings.%s", col)
+		assert.True(t, exists, "secret_findings.%s column missing", col)
 	}
 
 	// Verify sessions has both secret-scan state columns.
@@ -105,13 +90,7 @@ func TestSecretFindingsSchema(t *testing.T) {
 				  AND table_name = 'sessions'
 				  AND column_name = $2
 			)`, schemaTestSchema, col).Scan(&exists)
-		if err != nil {
-			t.Fatalf(
-				"checking sessions.%s: %v", col, err,
-			)
-		}
-		if !exists {
-			t.Errorf("sessions.%s column missing", col)
-		}
+		require.NoError(t, err, "checking sessions.%s", col)
+		assert.True(t, exists, "sessions.%s column missing", col)
 	}
 }

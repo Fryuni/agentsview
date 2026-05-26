@@ -8,6 +8,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type schemaProbeDriver struct{}
@@ -65,9 +68,7 @@ func newSchemaProbeDB(
 	})
 
 	db, err := sql.Open("agentsview_schema_probe", name)
-	if err != nil {
-		t.Fatalf("open fake schema probe db: %v", err)
-	}
+	require.NoError(t, err, "open fake schema probe db")
 	t.Cleanup(func() { db.Close() })
 	return db, state
 }
@@ -210,16 +211,10 @@ func TestEnsureSchemaBatchesColumnIntrospection(t *testing.T) {
 	}
 	db, state := newSchemaProbeDB(t, existing)
 
-	if err := EnsureSchema(context.Background(), db, "agentsview"); err != nil {
-		t.Fatalf("EnsureSchema: %v", err)
-	}
+	require.NoError(t, EnsureSchema(context.Background(), db, "agentsview"))
 
-	if got := state.informationQueryCount(); got != 1 {
-		t.Fatalf(
-			"information_schema.columns queries = %d, want 1",
-			got,
-		)
-	}
+	assert.Equal(t, 1, state.informationQueryCount(),
+		"information_schema.columns queries")
 }
 
 func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
@@ -254,14 +249,10 @@ func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 		},
 	})
 
-	if err := EnsureSchema(context.Background(), db, "agentsview"); err != nil {
-		t.Fatalf("EnsureSchema: %v", err)
-	}
+	require.NoError(t, EnsureSchema(context.Background(), db, "agentsview"))
 
 	// Two tables have missing columns (sessions: termination_status;
 	// messages: source_parent_uuid, is_sidechain, is_compact_boundary,
 	// thinking_text). Per-table batching means one ALTER each.
-	if got := state.alterTableExecCount(); got != 2 {
-		t.Fatalf("ALTER TABLE execs = %d, want 2", got)
-	}
+	assert.Equal(t, 2, state.alterTableExecCount(), "ALTER TABLE execs")
 }

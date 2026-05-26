@@ -4,8 +4,12 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -21,23 +25,16 @@ func setupContentSearch(t *testing.T) *Store {
 	pgURL := testPGURL(t)
 
 	pg, err := Open(pgURL, contentSearchSchema, true)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	require.NoError(t, err, "Open")
 	defer pg.Close()
 
-	if _, err := pg.Exec(`DROP SCHEMA IF EXISTS ` + contentSearchSchema + ` CASCADE`); err != nil {
-		t.Fatalf("drop schema: %v", err)
-	}
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + contentSearchSchema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
 	ctx := context.Background()
-	if err := EnsureSchema(ctx, pg, contentSearchSchema); err != nil {
-		t.Fatalf("EnsureSchema: %v", err)
-	}
+	require.NoError(t, EnsureSchema(ctx, pg, contentSearchSchema), "EnsureSchema")
 
 	store, err := NewStore(pgURL, contentSearchSchema, true)
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
+	require.NoError(t, err, "NewStore")
 	t.Cleanup(func() { store.Close() })
 	return store
 }
@@ -59,9 +56,7 @@ func insertCSSession(
 		ON CONFLICT (id) DO NOTHING`,
 		id, project, agent, startedAt, endedAt,
 	)
-	if err != nil {
-		t.Fatalf("insert session %s: %v", id, err)
-	}
+	require.NoError(t, err, "insert session %s", id)
 }
 
 // insertCSMessage inserts a message; isSystem=true sets is_system.
@@ -78,9 +73,7 @@ func insertCSMessage(
 		ON CONFLICT DO NOTHING`,
 		sessionID, ordinal, role, content, ts, len(content), isSystem,
 	)
-	if err != nil {
-		t.Fatalf("insert message ord=%d: %v", ordinal, err)
-	}
+	require.NoError(t, err, "insert message ord=%d", ordinal)
 }
 
 // insertCSToolCall inserts a tool_call row.
@@ -99,9 +92,7 @@ func insertCSToolCall(
 		sessionID, messageOrdinal, callIndex, toolName,
 		toolName, toolUseID, inputJSON, resultContent,
 	)
-	if err != nil {
-		t.Fatalf("insert tool_call: %v", err)
-	}
+	require.NoError(t, err, "insert tool_call")
 }
 
 // insertCSToolResultEvent inserts a tool_result_event row.
@@ -119,9 +110,7 @@ func insertCSToolResultEvent(
 		ON CONFLICT DO NOTHING`,
 		sessionID, messageOrdinal, callIndex, toolUseID, content, eventIndex,
 	)
-	if err != nil {
-		t.Fatalf("insert tool_result_event: %v", err)
-	}
+	require.NoError(t, err, "insert tool_result_event")
 }
 
 // ---- tests ----
@@ -142,22 +131,14 @@ func TestPGSearchContentSubstringMessages(t *testing.T) {
 		Sources: []string{"messages"}, Limit: 50,
 		IncludeOneShot: true,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent: %v", err)
-	}
-	if len(got.Matches) != 1 {
-		t.Fatalf("got %d matches, want 1: %+v", len(got.Matches), got.Matches)
-	}
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, got.Matches, 1, "matches=%+v", got.Matches)
 	m := got.Matches[0]
-	if m.SessionID != "cs-m1" || m.Location != "message" || m.Ordinal != 0 {
-		t.Errorf("unexpected match: %+v", m)
-	}
-	if m.Role != "user" {
-		t.Errorf("Role = %q, want user", m.Role)
-	}
-	if m.Snippet == "" {
-		t.Errorf("Snippet is empty")
-	}
+	assert.Equal(t, "cs-m1", m.SessionID)
+	assert.Equal(t, "message", m.Location)
+	assert.Equal(t, 0, m.Ordinal)
+	assert.Equal(t, "user", m.Role)
+	assert.NotEmpty(t, m.Snippet)
 }
 
 // TestPGSearchContentRedactsStraddlingSecret pins the PG default (non-reveal)
@@ -179,24 +160,16 @@ func TestPGSearchContentRedactsStraddlingSecret(t *testing.T) {
 		Sources: []string{"messages"}, Limit: 50, IncludeOneShot: true,
 	}
 	got, err := store.SearchContent(ctx, base)
-	if err != nil {
-		t.Fatalf("SearchContent: %v", err)
-	}
-	if len(got.Matches) != 1 {
-		t.Fatalf("got %d matches, want 1: %+v", len(got.Matches), got.Matches)
-	}
-	if strings.Contains(got.Matches[0].Snippet, "SECRETKEYMATERIAL") {
-		t.Errorf("default snippet leaked key material: %q", got.Matches[0].Snippet)
-	}
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, got.Matches, 1, "matches=%+v", got.Matches)
+	assert.NotContains(t, got.Matches[0].Snippet, "SECRETKEYMATERIAL",
+		"default snippet leaked key material")
 
 	base.RevealSecrets = true
 	rev, err := store.SearchContent(ctx, base)
-	if err != nil {
-		t.Fatalf("SearchContent reveal: %v", err)
-	}
-	if !strings.Contains(rev.Matches[0].Snippet, "SECRETKEYMATERIAL") {
-		t.Errorf("reveal snippet should show raw bytes: %q", rev.Matches[0].Snippet)
-	}
+	require.NoError(t, err, "SearchContent reveal")
+	assert.Contains(t, rev.Matches[0].Snippet, "SECRETKEYMATERIAL",
+		"reveal snippet should show raw bytes")
 }
 
 // TestPGSearchContentSubstringToolInput verifies substring match in tool_input.
@@ -214,19 +187,11 @@ func TestPGSearchContentSubstringToolInput(t *testing.T) {
 		Pattern: "printenv", Mode: "substring",
 		Sources: []string{"tool_input"}, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent: %v", err)
-	}
-	if len(got.Matches) != 1 {
-		t.Fatalf("got %d matches, want 1: %+v", len(got.Matches), got.Matches)
-	}
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, got.Matches, 1, "matches=%+v", got.Matches)
 	m := got.Matches[0]
-	if m.Location != "tool_input" {
-		t.Errorf("Location = %q, want tool_input", m.Location)
-	}
-	if m.ToolName != "Bash" {
-		t.Errorf("ToolName = %q, want Bash", m.ToolName)
-	}
+	assert.Equal(t, "tool_input", m.Location)
+	assert.Equal(t, "Bash", m.ToolName)
 }
 
 // TestPGSearchContentSubstringToolResult verifies substring match in tool_result
@@ -245,12 +210,9 @@ func TestPGSearchContentSubstringToolResult(t *testing.T) {
 		Pattern: "topsecretvalue", Mode: "substring",
 		Sources: []string{"tool_result"}, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent: %v", err)
-	}
-	if len(got.Matches) != 1 || got.Matches[0].Location != "tool_result" {
-		t.Fatalf("tool_result search: %+v", got.Matches)
-	}
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, got.Matches, 1, "matches=%+v", got.Matches)
+	assert.Equal(t, "tool_result", got.Matches[0].Location)
 }
 
 // TestPGSearchContentToolResultEvents verifies that the tool_result_events
@@ -272,12 +234,9 @@ func TestPGSearchContentToolResultEvents(t *testing.T) {
 		Pattern: "EVENTNEEDLE", Mode: "substring",
 		Sources: []string{"tool_result"}, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent: %v", err)
-	}
-	if len(got.Matches) != 1 || got.Matches[0].Location != "tool_result" {
-		t.Fatalf("event branch search: %+v", got.Matches)
-	}
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, got.Matches, 1, "matches=%+v", got.Matches)
+	assert.Equal(t, "tool_result", got.Matches[0].Location)
 }
 
 // TestPGSearchContentToolResultDedup verifies dedup: when a tool_use_id has
@@ -301,13 +260,9 @@ func TestPGSearchContentToolResultDedup(t *testing.T) {
 		Pattern: "DUPNEEDLE", Mode: "substring",
 		Sources: []string{"tool_result"}, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent: %v", err)
-	}
+	require.NoError(t, err, "SearchContent")
 	// Should be exactly 1 match (from the event, not result_content).
-	if len(got.Matches) != 1 {
-		t.Fatalf("dedup: got %d matches, want 1: %+v", len(got.Matches), got.Matches)
-	}
+	require.Len(t, got.Matches, 1, "dedup: matches=%+v", got.Matches)
 }
 
 // TestPGSearchContentSourcesSelector verifies that searching only "messages"
@@ -327,24 +282,18 @@ func TestPGSearchContentSourcesSelector(t *testing.T) {
 		Pattern: "SRCNEEDLE", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent: %v", err)
-	}
-	if len(got.Matches) != 0 {
-		t.Errorf("messages-only source returned tool match: %+v", got.Matches)
-	}
+	require.NoError(t, err, "SearchContent")
+	assert.Empty(t, got.Matches,
+		"messages-only source returned tool match")
 
 	// Both tool sources — must match.
 	all, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "SRCNEEDLE", Mode: "substring",
 		Sources: []string{"tool_input", "tool_result"}, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent all: %v", err)
-	}
-	if len(all.Matches) == 0 {
-		t.Error("expected matches when sources include tool_input/tool_result")
-	}
+	require.NoError(t, err, "SearchContent all")
+	assert.NotEmpty(t, all.Matches,
+		"expected matches when sources include tool_input/tool_result")
 }
 
 // TestPGSearchContentExcludeSystem verifies that is_system=true messages are
@@ -363,24 +312,17 @@ func TestPGSearchContentExcludeSystem(t *testing.T) {
 		Pattern: "SYSNEEDLE", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent with system: %v", err)
-	}
-	if len(with.Matches) != 1 {
-		t.Errorf("expected 1 match without ExcludeSystem, got %d", len(with.Matches))
-	}
+	require.NoError(t, err, "SearchContent with system")
+	assert.Len(t, with.Matches, 1)
 
 	// ExcludeSystem=true should suppress it.
 	without, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "SYSNEEDLE", Mode: "substring",
 		Sources: []string{"messages"}, ExcludeSystem: true, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent exclude system: %v", err)
-	}
-	if len(without.Matches) != 0 {
-		t.Errorf("ExcludeSystem=true should suppress system messages, got %d", len(without.Matches))
-	}
+	require.NoError(t, err, "SearchContent exclude system")
+	assert.Empty(t, without.Matches,
+		"ExcludeSystem=true should suppress system messages")
 }
 
 // TestPGSearchContentProjectFilter verifies the Project session filter.
@@ -402,17 +344,11 @@ func TestPGSearchContentProjectFilter(t *testing.T) {
 		Project: "alpha",
 		Limit:   50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent project filter: %v", err)
-	}
+	require.NoError(t, err, "SearchContent project filter")
 	for _, m := range got.Matches {
-		if m.Project != "alpha" {
-			t.Errorf("project filter leak: got project %q", m.Project)
-		}
+		assert.Equal(t, "alpha", m.Project, "project filter leak")
 	}
-	if len(got.Matches) == 0 {
-		t.Error("expected matches in alpha project")
-	}
+	assert.NotEmpty(t, got.Matches, "expected matches in alpha project")
 }
 
 // TestPGSearchContentPagination verifies Limit+1 sentinel and NextCursor.
@@ -430,29 +366,17 @@ func TestPGSearchContentPagination(t *testing.T) {
 		Pattern: "PAGENEEDLE", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 2,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent page1: %v", err)
-	}
-	if len(first.Matches) != 2 {
-		t.Fatalf("page1: got %d matches, want 2", len(first.Matches))
-	}
-	if first.NextCursor == 0 {
-		t.Fatal("page1: expected NextCursor to be set")
-	}
+	require.NoError(t, err, "SearchContent page1")
+	require.Len(t, first.Matches, 2)
+	require.NotZero(t, first.NextCursor, "page1: expected NextCursor to be set")
 
 	second, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "PAGENEEDLE", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 2, Cursor: first.NextCursor,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent page2: %v", err)
-	}
-	if len(second.Matches) != 1 {
-		t.Fatalf("page2: got %d matches, want 1", len(second.Matches))
-	}
-	if second.NextCursor != 0 {
-		t.Errorf("page2: NextCursor = %d, want 0 (last page)", second.NextCursor)
-	}
+	require.NoError(t, err, "SearchContent page2")
+	require.Len(t, second.Matches, 1)
+	assert.Zero(t, second.NextCursor, "page2: last page")
 }
 
 // TestPGSearchContentPaginationStableAcrossTies seeds one message ordinal that
@@ -476,17 +400,11 @@ func TestPGSearchContentPaginationStableAcrossTies(t *testing.T) {
 	full := base
 	full.Limit = 50
 	all, err := store.SearchContent(ctx, full)
-	if err != nil {
-		t.Fatalf("SearchContent full: %v", err)
-	}
-	if len(all.Matches) != 3 {
-		t.Fatalf("want 3 tied matches, got %d: %+v", len(all.Matches), all.Matches)
-	}
+	require.NoError(t, err, "SearchContent full")
+	require.Len(t, all.Matches, 3, "tied matches: %+v", all.Matches)
 	wantOrder := []string{"message", "tool_input", "tool_result"}
 	for i, loc := range wantOrder {
-		if all.Matches[i].Location != loc {
-			t.Errorf("match %d Location = %q, want %q", i, all.Matches[i].Location, loc)
-		}
+		assert.Equal(t, loc, all.Matches[i].Location, "match %d", i)
 	}
 	var paged []db.ContentMatch
 	for cursor := 0; ; {
@@ -494,23 +412,17 @@ func TestPGSearchContentPaginationStableAcrossTies(t *testing.T) {
 		p.Limit = 1
 		p.Cursor = cursor
 		page, err := store.SearchContent(ctx, p)
-		if err != nil {
-			t.Fatalf("SearchContent page at cursor %d: %v", cursor, err)
-		}
+		require.NoError(t, err, "SearchContent page at cursor %d", cursor)
 		paged = append(paged, page.Matches...)
 		if page.NextCursor == 0 {
 			break
 		}
 		cursor = page.NextCursor
 	}
-	if len(paged) != len(all.Matches) {
-		t.Fatalf("paged %d rows, want %d (duplicates or gaps)", len(paged), len(all.Matches))
-	}
+	require.Len(t, paged, len(all.Matches), "duplicates or gaps")
 	for i := range all.Matches {
-		if paged[i].Location != all.Matches[i].Location {
-			t.Errorf("row %d: paged Location %q != single-page %q",
-				i, paged[i].Location, all.Matches[i].Location)
-		}
+		assert.Equal(t, all.Matches[i].Location, paged[i].Location,
+			"row %d: paged vs single-page", i)
 	}
 }
 
@@ -537,13 +449,10 @@ func TestPGSearchContentEmptyToolUseIDNotSuppressed(t *testing.T) {
 			Pattern: "FINDA", Mode: mode,
 			Sources: []string{"tool_result"}, Limit: 50,
 		})
-		if err != nil {
-			t.Fatalf("SearchContent %s: %v", mode, err)
-		}
-		if len(got.Matches) != 1 || got.Matches[0].Location != "tool_result" {
-			t.Fatalf("%s: empty-ID result_content suppressed: got %+v",
-				mode, got.Matches)
-		}
+		require.NoError(t, err, "SearchContent %s", mode)
+		require.Len(t, got.Matches, 1,
+			"%s: empty-ID result_content suppressed: %+v", mode, got.Matches)
+		assert.Equal(t, "tool_result", got.Matches[0].Location)
 	}
 }
 
@@ -556,27 +465,22 @@ func TestPGContentSearchTrigramIndex(t *testing.T) {
 	ctx := context.Background()
 
 	var hasExt bool
-	if err := store.DB().QueryRowContext(ctx,
+	require.NoError(t, store.DB().QueryRowContext(ctx,
 		`SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm')`,
-	).Scan(&hasExt); err != nil {
-		t.Fatalf("query pg_extension: %v", err)
-	}
+	).Scan(&hasExt), "query pg_extension")
 	if !hasExt {
 		t.Skip("pg_trgm not installable on this instance; index is best-effort")
 	}
 
 	var hasIdx bool
-	if err := store.DB().QueryRowContext(ctx,
+	require.NoError(t, store.DB().QueryRowContext(ctx,
 		`SELECT EXISTS (
 			SELECT 1 FROM pg_indexes
 			WHERE schemaname = $1 AND indexname = 'idx_messages_content_trgm'
 		)`, contentSearchSchema,
-	).Scan(&hasIdx); err != nil {
-		t.Fatalf("query pg_indexes: %v", err)
-	}
-	if !hasIdx {
-		t.Errorf("idx_messages_content_trgm missing after EnsureSchema")
-	}
+	).Scan(&hasIdx), "query pg_indexes")
+	assert.True(t, hasIdx,
+		"idx_messages_content_trgm missing after EnsureSchema")
 }
 
 // TestPGSearchContentRegex verifies regex mode.
@@ -594,12 +498,9 @@ func TestPGSearchContentRegex(t *testing.T) {
 		Pattern: `AKIA[0-9A-Z]{16}`, Mode: "regex",
 		Sources: []string{"messages"}, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent regex: %v", err)
-	}
-	if len(got.Matches) != 1 || got.Matches[0].Ordinal != 0 {
-		t.Fatalf("regex match = %+v, want 1 at ordinal 0", got.Matches)
-	}
+	require.NoError(t, err, "SearchContent regex")
+	require.Len(t, got.Matches, 1)
+	assert.Equal(t, 0, got.Matches[0].Ordinal)
 }
 
 // TestPGSearchContentRegexInvalid verifies that an invalid pattern returns a
@@ -611,14 +512,10 @@ func TestPGSearchContentRegexInvalid(t *testing.T) {
 		Pattern: `(unclosed`, Mode: "regex",
 		Sources: []string{"messages"},
 	})
-	if err == nil {
-		t.Fatal("expected error for invalid regex")
-	}
+	require.Error(t, err, "expected error for invalid regex")
 	var inputErr *db.SearchInputError
-	if _, ok := err.(*db.SearchInputError); !ok {
-		_ = inputErr
-		t.Errorf("expected *SearchInputError, got %T: %v", err, err)
-	}
+	assert.True(t, errors.As(err, &inputErr),
+		"expected *SearchInputError, got %T: %v", err, err)
 }
 
 // TestPGSearchContentFTSFallsBackToSubstring verifies that fts mode runs
@@ -635,12 +532,9 @@ func TestPGSearchContentFTSFallsBackToSubstring(t *testing.T) {
 		Pattern: "optimize", Mode: "fts",
 		Sources: []string{"messages"}, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent fts (should fall back): %v", err)
-	}
-	if len(got.Matches) != 1 || got.Matches[0].Location != "message" {
-		t.Fatalf("fts fallback = %+v, want 1 message", got.Matches)
-	}
+	require.NoError(t, err, "SearchContent fts (should fall back)")
+	require.Len(t, got.Matches, 1)
+	assert.Equal(t, "message", got.Matches[0].Location)
 }
 
 // TestPGSearchContentUnknownSource verifies that an unknown source name
@@ -652,12 +546,10 @@ func TestPGSearchContentUnknownSource(t *testing.T) {
 		Pattern: "x", Mode: "substring",
 		Sources: []string{"messages", "bogus"},
 	})
-	if err == nil {
-		t.Fatal("expected error for unknown source name")
-	}
-	if _, ok := err.(*db.SearchInputError); !ok {
-		t.Errorf("expected *SearchInputError, got %T: %v", err, err)
-	}
+	require.Error(t, err, "expected error for unknown source name")
+	var inputErr *db.SearchInputError
+	assert.True(t, errors.As(err, &inputErr),
+		"expected *SearchInputError, got %T: %v", err, err)
 }
 
 // TestPGSearchContentSnippetPresent verifies that the snippet field is
@@ -674,15 +566,9 @@ func TestPGSearchContentSnippetPresent(t *testing.T) {
 		Pattern: "SNIPNEEDLE", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 50,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent: %v", err)
-	}
-	if len(got.Matches) != 1 {
-		t.Fatalf("got %d matches, want 1", len(got.Matches))
-	}
-	if got.Matches[0].Snippet == "" {
-		t.Error("Snippet is empty, want non-empty")
-	}
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, got.Matches, 1)
+	assert.NotEmpty(t, got.Matches[0].Snippet)
 }
 
 // insertCSChildSession inserts a child session (relationship_type=subagent)
@@ -704,9 +590,7 @@ func insertCSChildSession(
 		ON CONFLICT (id) DO NOTHING`,
 		id, project, agent, parentID, startedAt, endedAt,
 	)
-	if err != nil {
-		t.Fatalf("insert child session %s: %v", id, err)
-	}
+	require.NoError(t, err, "insert child session %s", id)
 }
 
 // TestPGSearchContentIncludeChildren verifies that IncludeChildren=true
@@ -753,9 +637,7 @@ func TestPGSearchContentIncludeChildren(t *testing.T) {
 		IncludeChildren: true,
 		IncludeOneShot:  true,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent IncludeChildren=true: %v", err)
-	}
+	require.NoError(t, err, "SearchContent IncludeChildren=true")
 
 	var foundToolInput, foundToolResult bool
 	for _, m := range withChildren.Matches {
@@ -766,18 +648,12 @@ func TestPGSearchContentIncludeChildren(t *testing.T) {
 			foundToolResult = true
 		}
 	}
-	if !foundToolInput {
-		t.Errorf(
-			"IncludeChildren=true: child tool_input match not found; matches=%+v",
-			withChildren.Matches,
-		)
-	}
-	if !foundToolResult {
-		t.Errorf(
-			"IncludeChildren=true: child tool_result event match not found; matches=%+v",
-			withChildren.Matches,
-		)
-	}
+	assert.True(t, foundToolInput,
+		"IncludeChildren=true: child tool_input match not found; matches=%+v",
+		withChildren.Matches)
+	assert.True(t, foundToolResult,
+		"IncludeChildren=true: child tool_result event match not found; matches=%+v",
+		withChildren.Matches)
 
 	// --- IncludeChildren=false: child matches must be absent ---
 	withoutChildren, err := store.SearchContent(ctx, db.ContentSearchFilter{
@@ -788,15 +664,9 @@ func TestPGSearchContentIncludeChildren(t *testing.T) {
 		IncludeChildren: false,
 		IncludeOneShot:  true,
 	})
-	if err != nil {
-		t.Fatalf("SearchContent IncludeChildren=false: %v", err)
-	}
+	require.NoError(t, err, "SearchContent IncludeChildren=false")
 	for _, m := range withoutChildren.Matches {
-		if m.SessionID == "ic-child" || m.SessionID == "ic-child2" {
-			t.Errorf(
-				"IncludeChildren=false: child session %q appeared in results",
-				m.SessionID,
-			)
-		}
+		assert.NotContains(t, []string{"ic-child", "ic-child2"}, m.SessionID,
+			"IncludeChildren=false: child session %q appeared in results", m.SessionID)
 	}
 }

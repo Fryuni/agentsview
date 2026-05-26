@@ -6,6 +6,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -16,9 +19,7 @@ func TestListSessions_HasSecret(t *testing.T) {
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(pgURL, testSchema, true)
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
+	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	pg := store.DB()
@@ -41,26 +42,19 @@ func TestListSessions_HasSecret(t *testing.T) {
 			 '2026-03-12T08:30:00Z'::timestamptz,
 			 2, 1, 0)
 	`)
-	if err != nil {
-		t.Fatalf("inserting test sessions: %v", err)
-	}
+	require.NoError(t, err, "inserting test sessions")
 
 	ctx := context.Background()
 	page, err := store.ListSessions(ctx, db.SessionFilter{
 		HasSecret: true,
 		Limit:     50,
 	})
-	if err != nil {
-		t.Fatalf("ListSessions: %v", err)
-	}
+	require.NoError(t, err, "ListSessions")
 
 	// Only the leaky session should appear.
 	for _, s := range page.Sessions {
-		if s.ID == "has-secret-clean" {
-			t.Errorf(
-				"clean session (secret_leak_count=0) included in HasSecret results",
-			)
-		}
+		assert.NotEqual(t, "has-secret-clean", s.ID,
+			"clean session (secret_leak_count=0) included in HasSecret results")
 	}
 
 	var found *db.Session
@@ -70,15 +64,8 @@ func TestListSessions_HasSecret(t *testing.T) {
 			break
 		}
 	}
-	if found == nil {
-		t.Fatal("leaky session not found in HasSecret results")
-	}
-	if found.SecretLeakCount != 3 {
-		t.Errorf(
-			"SecretLeakCount = %d, want 3",
-			found.SecretLeakCount,
-		)
-	}
+	require.NotNil(t, found, "leaky session not found in HasSecret results")
+	assert.Equal(t, 3, found.SecretLeakCount)
 
 	_, err = pg.Exec(`
 		UPDATE sessions
@@ -95,20 +82,15 @@ func TestListSessions_HasSecret(t *testing.T) {
 			 '2026-03-12T07:30:00Z'::timestamptz,
 			 2, 1, 2, 'old-rules')
 	`)
-	if err != nil {
-		t.Fatalf("seeding stale secret session: %v", err)
-	}
+	require.NoError(t, err, "seeding stale secret session")
 	current, err := store.ListSessions(ctx, db.SessionFilter{
 		HasSecret:            true,
 		SecretsRulesVersions: []string{"v-current"},
 		Limit:                50,
 	})
-	if err != nil {
-		t.Fatalf("ListSessions current rules: %v", err)
-	}
+	require.NoError(t, err, "ListSessions current rules")
 	for _, s := range current.Sessions {
-		if s.ID == "has-secret-stale" {
-			t.Fatal("stale secret session included in versioned HasSecret results")
-		}
+		require.NotEqual(t, "has-secret-stale", s.ID,
+			"stale secret session included in versioned HasSecret results")
 	}
 }

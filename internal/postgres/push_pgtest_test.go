@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -27,26 +30,19 @@ func TestPushSystemFingerprintCollisionRegression(t *testing.T) {
 
 	const schema = "agentsview_push_sysfingerprint_test"
 	pg, err := Open(pgURL, schema, true)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := context.Background()
-	if _, err := pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`); err != nil {
-		t.Fatalf("drop schema: %v", err)
-	}
-	if err := EnsureSchema(ctx, pg, schema); err != nil {
-		t.Fatalf("EnsureSchema: %v", err)
-	}
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	// Local SQLite DB.
 	localDB, err := db.Open(
 		filepath.Join(t.TempDir(), "local.db"),
 	)
-	if err != nil {
-		t.Fatalf("db.Open: %v", err)
-	}
+	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
 	sync := &Sync{
@@ -67,9 +63,7 @@ func TestPushSystemFingerprintCollisionRegression(t *testing.T) {
 		MessageCount: 7,
 		CreatedAt:    "2026-01-01T00:00:00Z",
 	}
-	if err := localDB.UpsertSession(sess); err != nil {
-		t.Fatalf("UpsertSession: %v", err)
-	}
+	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
 
 	// First set: system ordinals {0,4,5}.
 	firstSet := map[int]bool{0: true, 4: true, 5: true}
@@ -84,15 +78,11 @@ func TestPushSystemFingerprintCollisionRegression(t *testing.T) {
 			IsSystem:      firstSet[i],
 		}
 	}
-	if err := localDB.InsertMessages(msgs); err != nil {
-		t.Fatalf("InsertMessages (first set): %v", err)
-	}
+	require.NoError(t, localDB.InsertMessages(msgs), "InsertMessages (first set)")
 
 	// First push.
 	_, err = sync.Push(ctx, false, nil)
-	if err != nil {
-		t.Fatalf("Push (first): %v", err)
-	}
+	require.NoError(t, err, "Push (first)")
 
 	// Verify PG reflects system ordinals {0,4,5}.
 	checkIsSystem(t, pg, sessID, firstSet, 7)
@@ -104,27 +94,22 @@ func TestPushSystemFingerprintCollisionRegression(t *testing.T) {
 	for i := range 7 {
 		msgs[i].IsSystem = secondSet[i]
 	}
-	if err := localDB.ReplaceSessionMessages(sessID, msgs); err != nil {
-		t.Fatalf("ReplaceSessionMessages (second set): %v", err)
-	}
+	require.NoError(t, localDB.ReplaceSessionMessages(sessID, msgs),
+		"ReplaceSessionMessages (second set)")
 
 	// Force re-evaluation by clearing both the watermark and the cached
 	// session-level boundary fingerprints. The session-level fingerprint
 	// does not include is_system flags (only metadata like MessageCount),
 	// so the boundary cache must be cleared for the incremental push to
 	// reach pushMessages and compare the message-level string fingerprint.
-	if err := localDB.SetSyncState("last_push_at", ""); err != nil {
-		t.Fatalf("clearing last_push_at: %v", err)
-	}
-	if err := localDB.SetSyncState(lastPushBoundaryStateKey, ""); err != nil {
-		t.Fatalf("clearing boundary state: %v", err)
-	}
+	require.NoError(t, localDB.SetSyncState("last_push_at", ""),
+		"clearing last_push_at")
+	require.NoError(t, localDB.SetSyncState(lastPushBoundaryStateKey, ""),
+		"clearing boundary state")
 
 	// Second push — must NOT skip due to fingerprint match.
 	_, err = sync.Push(ctx, false, nil)
-	if err != nil {
-		t.Fatalf("Push (second): %v", err)
-	}
+	require.NoError(t, err, "Push (second)")
 
 	// Verify PG now reflects updated system ordinals {1,2,6}.
 	checkIsSystem(t, pg, sessID, secondSet, 7)
@@ -139,23 +124,16 @@ func TestPushSessionTerminationStatus(t *testing.T) {
 
 	const schema = "agentsview_push_termstatus_test"
 	pg, err := Open(pgURL, schema, true)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
+	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := context.Background()
-	if _, err := pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`); err != nil {
-		t.Fatalf("drop schema: %v", err)
-	}
-	if err := EnsureSchema(ctx, pg, schema); err != nil {
-		t.Fatalf("EnsureSchema: %v", err)
-	}
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
-	if err != nil {
-		t.Fatalf("db.Open: %v", err)
-	}
+	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
 	sync := &Sync{
@@ -183,44 +161,33 @@ func TestPushSessionTerminationStatus(t *testing.T) {
 	pushOnce := func(s db.Session) {
 		t.Helper()
 		tx, err := pg.BeginTx(ctx, nil)
-		if err != nil {
-			t.Fatalf("BeginTx: %v", err)
-		}
+		require.NoError(t, err, "BeginTx")
 		if err := sync.pushSession(ctx, tx, s); err != nil {
 			_ = tx.Rollback()
 			t.Fatalf("pushSession: %v", err)
 		}
-		if err := tx.Commit(); err != nil {
-			t.Fatalf("Commit: %v", err)
-		}
+		require.NoError(t, tx.Commit(), "Commit")
 	}
 
 	pushOnce(sess)
 
 	var got *string
-	if err := pg.QueryRow(
+	require.NoError(t, pg.QueryRow(
 		`SELECT termination_status FROM sessions WHERE id = $1`,
 		sess.ID,
-	).Scan(&got); err != nil {
-		t.Fatalf("read back: %v", err)
-	}
-	if got == nil || *got != "tool_call_pending" {
-		t.Fatalf("got %v, want tool_call_pending", got)
-	}
+	).Scan(&got), "read back")
+	require.NotNil(t, got)
+	assert.Equal(t, "tool_call_pending", *got)
 
 	// Update to NULL and verify ON CONFLICT clears it.
 	sess.TerminationStatus = nil
 	pushOnce(sess)
 
-	if err := pg.QueryRow(
+	require.NoError(t, pg.QueryRow(
 		`SELECT termination_status FROM sessions WHERE id = $1`,
 		sess.ID,
-	).Scan(&got); err != nil {
-		t.Fatalf("read back 2: %v", err)
-	}
-	if got != nil {
-		t.Fatalf("got %q, want NULL", *got)
-	}
+	).Scan(&got), "read back 2")
+	assert.Nil(t, got)
 }
 
 // checkIsSystem asserts that PG contains exactly wantTotal rows for the
@@ -240,35 +207,23 @@ func checkIsSystem(
 		 WHERE session_id = $1 ORDER BY ordinal`,
 		sessID,
 	)
-	if err != nil {
-		t.Fatalf("querying PG messages: %v", err)
-	}
+	require.NoError(t, err, "querying PG messages")
 	defer rows.Close()
 	seen := make(map[int]bool, wantTotal)
 	for rows.Next() {
 		var ordinal int
 		var isSystem bool
-		if err := rows.Scan(&ordinal, &isSystem); err != nil {
-			t.Fatalf("scanning row: %v", err)
-		}
+		require.NoError(t, rows.Scan(&ordinal, &isSystem), "scanning row")
 		seen[ordinal] = true
 		want := wantSystem[ordinal]
-		if isSystem != want {
-			t.Errorf("ordinal %d: is_system=%v, want %v",
-				ordinal, isSystem, want)
-		}
+		assert.Equal(t, want, isSystem, "ordinal %d is_system", ordinal)
 	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("rows error: %v", err)
-	}
-	if len(seen) != wantTotal {
-		t.Errorf("PG has %d message rows for session %s, want %d",
-			len(seen), sessID, wantTotal)
-	}
+	require.NoError(t, rows.Err(), "rows error")
+	assert.Len(t, seen, wantTotal,
+		"PG has %d message rows for session %s, want %d",
+		len(seen), sessID, wantTotal)
 	// Verify every expected ordinal was present (no gaps or substitutions).
 	for i := range wantTotal {
-		if !seen[i] {
-			t.Errorf("ordinal %d missing from PG messages", i)
-		}
+		assert.True(t, seen[i], "ordinal %d missing from PG messages", i)
 	}
 }
