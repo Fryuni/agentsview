@@ -25,6 +25,15 @@ Instructions for autonomous coding agents working in this repository.
 - Run relevant tests before committing when practical.
 - If tests cannot be run, state that clearly in the handoff.
 
+## Test Style
+
+- Go tests use `github.com/stretchr/testify` for assertions. Use `require.X`
+  when a failed check should abort the test (setup, nil receivers, length checks
+  before indexing) and `assert.X` for independent checks that should keep
+  running. Don't write `if got != want { t.Fatalf(...) }` in new tests.
+- Domain-specific helpers are fine, but they must use testify internally rather
+  than stdlib comparisons.
+
 ## Safety
 
 - Do not revert user-authored or unrelated local changes unless explicitly
