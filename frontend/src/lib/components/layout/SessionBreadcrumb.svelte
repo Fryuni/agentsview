@@ -601,9 +601,13 @@
         <button
           class="minimap-btn"
           class:minimap-btn--active={ui.vitalsOpen}
-          title="Session vital signs"
+          title={ui.vitalsOpen
+            ? "Hide session analysis"
+            : "Show session analysis"}
           onclick={() => ui.toggleVitals()}
-          aria-label="Toggle session vital signs"
+          aria-label={ui.vitalsOpen
+            ? "Hide session analysis"
+            : "Show session analysis"}
         >
           <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
             <path d="M1 14V8h2v6H1zm4 0V2h2v12H5zm4 0V5h2v9H9zm4 0V9h2v5h-2z"/>
