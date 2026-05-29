@@ -82,6 +82,20 @@ func TestRemoteTarStderrBenign(t *testing.T) {
 				"tar: Error exit delayed from previous errors.",
 			want: true,
 		},
+		{
+			// GNU tar uses a capital F here (create.c), unlike the
+			// lowercase "file changed as we read it".
+			name: "capitalized GNU file-removed warning is benign",
+			stderr: "tar: home/wes/.codex/x.json: " +
+				"File removed before we read it",
+			want: true,
+		},
+		{
+			name: "capitalized file-changed warning is benign",
+			stderr: "tar: home/wes/.claude/y.jsonl: " +
+				"File changed as we read it",
+			want: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

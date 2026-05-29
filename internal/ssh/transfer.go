@@ -180,7 +180,8 @@ func remappedDir(tempDir, remoteDir string) string {
 // benignRemoteTarPrimary are remote tar (creation-side) stderr
 // messages we treat as non-fatal: a file mutated or vanished while it
 // was being archived. The resulting archive is still well-formed, and
-// the local extractor independently validates its integrity.
+// the local extractor independently validates its integrity. Stored
+// lowercase; matched case-insensitively against a lowercased line.
 var benignRemoteTarPrimary = []string{
 	"file changed as we read it",
 	"file removed before we read it",
@@ -188,10 +189,10 @@ var benignRemoteTarPrimary = []string{
 
 // benignRemoteTarFallout are the summary lines tar prints after a
 // non-zero exit. They are tolerated only alongside a primary benign
-// warning, never on their own.
+// warning, never on their own. Stored lowercase (see above).
 var benignRemoteTarFallout = []string{
-	"Exiting with failure status due to previous errors", // GNU tar
-	"Error exit delayed from previous errors",            // bsdtar
+	"exiting with failure status due to previous errors", // GNU tar
+	"error exit delayed from previous errors",            // bsdtar
 }
 
 // remoteTarStderrBenign reports whether a non-nil cleanup() error from
@@ -208,7 +209,13 @@ func remoteTarStderrBenign(err error) bool {
 	}
 	sawPrimary := false
 	for line := range strings.SplitSeq(ce.Stderr, "\n") {
-		line = strings.TrimRight(strings.TrimSpace(line), ". ")
+		// Lowercase for case-insensitive matching: GNU tar is
+		// inconsistent about capitalization (create.c emits
+		// "File removed before we read it" with a capital F but
+		// "file changed as we read it" lowercase).
+		line = strings.ToLower(
+			strings.TrimRight(strings.TrimSpace(line), ". "),
+		)
 		switch {
 		case line == "":
 			continue
