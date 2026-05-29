@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,6 +20,7 @@ type tarEntry struct {
 	typeflag byte
 	body     string
 	linkname string
+	modTime  time.Time
 }
 
 // buildTestTar serializes entries into an in-memory tar archive.
@@ -32,6 +34,7 @@ func buildTestTar(t *testing.T, entries []tarEntry) []byte {
 			Typeflag: e.typeflag,
 			Linkname: e.linkname,
 			Mode:     0o644,
+			ModTime:  e.modTime,
 		}
 		if e.typeflag == tar.TypeReg {
 			hdr.Size = int64(len(e.body))
@@ -136,32 +139,47 @@ func TestExtractTarStreamRejectsRelativePathEscape(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(filepath.Dir(dst), "escape.txt"))
 }
 
-func TestExtractTarStreamRejectsRelativeSymlinkEscape(t *testing.T) {
+func TestExtractTarStreamSkipsSymlinks(t *testing.T) {
 	dst := t.TempDir()
 	data := buildTestTar(t, []tarEntry{
+		{name: "home/target.txt", typeflag: tar.TypeReg, body: "data"},
+		// An in-tree link plus relative and absolute escapes: all
+		// are skipped, never created, so none can redirect a later
+		// write outside the extraction dir.
 		{
-			name:     "home/evil",
+			name:     "home/link.txt",
+			typeflag: tar.TypeSymlink,
+			linkname: "target.txt",
+		},
+		{
+			name:     "home/rel-escape",
 			typeflag: tar.TypeSymlink,
 			linkname: "../../../../etc",
 		},
-	})
-
-	_, err := extract(t, data, dst)
-	require.Error(t, err)
-}
-
-func TestExtractTarStreamRejectsAbsoluteSymlinkEscape(t *testing.T) {
-	dst := t.TempDir()
-	data := buildTestTar(t, []tarEntry{
 		{
-			name:     "home/evil",
+			name:     "home/abs-escape",
 			typeflag: tar.TypeSymlink,
 			linkname: "/etc/passwd",
 		},
 	})
 
 	_, err := extract(t, data, dst)
-	require.Error(t, err)
+	require.NoError(t, err)
+
+	// The regular file is still extracted.
+	body, err := os.ReadFile(filepath.Join(dst, "home/target.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "data", string(body))
+
+	// No symlink is created anywhere.
+	for _, name := range []string{
+		"home/link.txt", "home/rel-escape", "home/abs-escape",
+	} {
+		_, statErr := os.Lstat(filepath.Join(dst, name))
+		assert.True(
+			t, os.IsNotExist(statErr), "%s should be skipped", name,
+		)
+	}
 }
 
 func TestExtractTarStreamNormalHardlink(t *testing.T) {
@@ -180,24 +198,30 @@ func TestExtractTarStreamNormalHardlink(t *testing.T) {
 	assert.Equal(t, "shared", string(b))
 }
 
-func TestExtractTarStreamSymlinkWithinDst(t *testing.T) {
+func TestExtractTarStreamPreservesModTime(t *testing.T) {
 	dst := t.TempDir()
+	// The incremental skip cache keys on (path, mtime) and the sync
+	// engine treats it as authoritative, so extracted files must keep
+	// their archived mtime across syncs or nothing is ever skipped.
+	want := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	data := buildTestTar(t, []tarEntry{
-		{name: "home/target.txt", typeflag: tar.TypeReg, body: "data"},
 		{
-			name:     "home/link.txt",
-			typeflag: tar.TypeSymlink,
-			linkname: "target.txt",
+			name:     "home/wes/.claude/s.jsonl",
+			typeflag: tar.TypeReg,
+			body:     "session",
+			modTime:  want,
 		},
 	})
 
-	skipped, err := extract(t, data, dst)
+	_, err := extract(t, data, dst)
 	require.NoError(t, err)
-	assert.Equal(t, 0, skipped)
 
-	got, err := os.Readlink(filepath.Join(dst, "home/link.txt"))
+	info, err := os.Stat(filepath.Join(dst, "home/wes/.claude/s.jsonl"))
 	require.NoError(t, err)
-	assert.Equal(t, "target.txt", got)
+	assert.True(
+		t, info.ModTime().Equal(want),
+		"extracted mtime = %s, want %s", info.ModTime(), want,
+	)
 }
 
 func TestExtractTarStreamCreatesDirsAndFiles(t *testing.T) {

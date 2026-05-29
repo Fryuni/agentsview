@@ -66,7 +66,11 @@ func extractEntry(
 	case tar.TypeReg:
 		return false, writeRegular(target, tr, hdr)
 	case tar.TypeSymlink:
-		return false, writeSymlink(dst, target, hdr)
+		// Symlinks are not session data, and a symlink restored from
+		// an archive can redirect later writes outside the extraction
+		// dir. Any regular file a symlink might alias is extracted on
+		// its own, so skip symlinks entirely.
+		return false, nil
 	case tar.TypeLink:
 		return writeHardlink(dst, target, hdr)
 	default:
@@ -143,30 +147,13 @@ func writeRegular(
 			hdr.Name, n, hdr.Size,
 		)
 	}
-	return nil
-}
-
-// writeSymlink recreates a symlink only if its target stays within
-// dst; a link pointing outside the extraction dir is rejected so it
-// cannot be used to write through to the real filesystem.
-func writeSymlink(dst, target string, hdr *tar.Header) error {
-	link := hdr.Linkname
-	var resolved string
-	if filepath.IsAbs(link) {
-		resolved = filepath.Clean(link)
-	} else {
-		resolved = filepath.Join(filepath.Dir(target), link)
-	}
-	if !within(dst, resolved) {
-		return fmt.Errorf(
-			"symlink %q points outside extraction dir", hdr.Name,
-		)
-	}
-	if err := mkdirAll(filepath.Dir(target), hdr.Name); err != nil {
-		return err
-	}
-	if err := os.Symlink(link, target); err != nil {
-		return fmt.Errorf("symlink %q: %w", hdr.Name, err)
+	// Restore the archived mtime: the incremental skip cache keys on
+	// (path, mtime), so files must keep their remote mtime across
+	// syncs or nothing is ever skipped. Best-effort: a failure only
+	// forces a redundant resync, never data loss, so it must not
+	// discard an otherwise complete extraction.
+	if !hdr.ModTime.IsZero() {
+		_ = os.Chtimes(target, hdr.ModTime, hdr.ModTime)
 	}
 	return nil
 }
