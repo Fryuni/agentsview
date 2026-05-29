@@ -246,3 +246,31 @@ func TestExtractTarStreamCreatesDirsAndFiles(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "{}", string(body))
 }
+
+// TestExtractTarStreamExtractsLegacyRegularType guards against the
+// assumption that the extractor must special-case the deprecated
+// TypeRegA ('\x00') regular-file marker: tar.Reader.Next normalizes it
+// to TypeReg (or TypeDir) before we see the header, so an entry
+// authored as TypeRegA must still extract, not be silently skipped.
+func TestExtractTarStreamExtractsLegacyRegularType(t *testing.T) {
+	dst := t.TempDir()
+	body := []byte("legacy regular file")
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "home/wes/.codex/old.json",
+		Typeflag: tar.TypeRegA, //nolint:staticcheck // testing the deprecated marker
+		Mode:     0o644,
+		Size:     int64(len(body)),
+	}))
+	_, err := tw.Write(body)
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+
+	_, err = extract(t, buf.Bytes(), dst)
+	require.NoError(t, err)
+
+	got, err := os.ReadFile(filepath.Join(dst, "home/wes/.codex/old.json"))
+	require.NoError(t, err)
+	assert.Equal(t, string(body), string(got))
+}
