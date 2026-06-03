@@ -6,21 +6,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-type sessionUsageResponse struct {
-	db.SessionUsage
-	UnpricedModels []string `json:"unpriced_models"`
-	ServerRunning  bool     `json:"server_running"`
-}
-
-type sessionUsageErrorResponse struct {
-	Error sessionUsageError `json:"error"`
-}
-
-type sessionUsageError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
 func (s *Server) handleSessionUsage(
 	w http.ResponseWriter, r *http.Request,
 ) {
@@ -50,15 +35,23 @@ func (s *Server) handleSessionUsage(
 	writeJSON(w, http.StatusOK, newSessionUsageResponse(usage))
 }
 
-func newSessionUsageResponse(usage *db.SessionUsage) sessionUsageResponse {
+func newSessionUsageResponse(usage *db.SessionUsage) map[string]any {
 	unpricedModels := usage.UnpricedModels
 	if unpricedModels == nil {
 		unpricedModels = []string{}
 	}
-	return sessionUsageResponse{
-		SessionUsage:   *usage,
-		UnpricedModels: unpricedModels,
-		ServerRunning:  true,
+	return map[string]any{
+		"session_id":          usage.SessionID,
+		"agent":               usage.Agent,
+		"project":             usage.Project,
+		"total_output_tokens": usage.TotalOutputTokens,
+		"peak_context_tokens": usage.PeakContextTokens,
+		"has_token_data":      usage.HasTokenData,
+		"cost_usd":            usage.CostUSD,
+		"has_cost":            usage.HasCost,
+		"models":              usage.Models,
+		"unpriced_models":     unpricedModels,
+		"server_running":      true,
 	}
 }
 
@@ -68,10 +61,10 @@ func writeSessionUsageError(
 	code string,
 	message string,
 ) {
-	writeJSON(w, status, sessionUsageErrorResponse{
-		Error: sessionUsageError{
-			Code:    code,
-			Message: message,
+	writeJSON(w, status, map[string]any{
+		"error": map[string]string{
+			"code":    code,
+			"message": message,
 		},
 	})
 }
