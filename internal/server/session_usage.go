@@ -12,6 +12,15 @@ type sessionUsageResponse struct {
 	ServerRunning  bool     `json:"server_running"`
 }
 
+type sessionUsageErrorResponse struct {
+	Error sessionUsageError `json:"error"`
+}
+
+type sessionUsageError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 func (s *Server) handleSessionUsage(
 	w http.ResponseWriter, r *http.Request,
 ) {
@@ -20,11 +29,21 @@ func (s *Server) handleSessionUsage(
 		if handleContextError(w, err) {
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeSessionUsageError(
+			w,
+			http.StatusInternalServerError,
+			"usage_query_failed",
+			"failed to query session usage",
+		)
 		return
 	}
 	if usage == nil {
-		writeError(w, http.StatusNotFound, "session not found")
+		writeSessionUsageError(
+			w,
+			http.StatusNotFound,
+			"session_not_found",
+			"session not found",
+		)
 		return
 	}
 
@@ -41,4 +60,18 @@ func newSessionUsageResponse(usage *db.SessionUsage) sessionUsageResponse {
 		UnpricedModels: unpricedModels,
 		ServerRunning:  true,
 	}
+}
+
+func writeSessionUsageError(
+	w http.ResponseWriter,
+	status int,
+	code string,
+	message string,
+) {
+	writeJSON(w, status, sessionUsageErrorResponse{
+		Error: sessionUsageError{
+			Code:    code,
+			Message: message,
+		},
+	})
 }

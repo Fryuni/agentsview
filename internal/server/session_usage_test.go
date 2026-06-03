@@ -3,6 +3,7 @@ package server_test
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -88,6 +89,7 @@ func TestHandleSessionUsage_NotFound(t *testing.T) {
 
 	w := te.get(t, "/api/v1/sessions/missing/usage")
 	assertStatus(t, w, http.StatusNotFound)
+	assertSessionUsageError(t, w, "session_not_found", "session not found")
 }
 
 func TestHandleSessionUsage_DBError(t *testing.T) {
@@ -96,6 +98,7 @@ func TestHandleSessionUsage_DBError(t *testing.T) {
 
 	w := te.get(t, "/api/v1/sessions/codex:usage-error/usage")
 	assertStatus(t, w, http.StatusInternalServerError)
+	assertSessionUsageError(t, w, "usage_query_failed", "failed to query session usage")
 }
 
 func seedSessionUsagePricing(t *testing.T, d *db.DB) {
@@ -107,4 +110,22 @@ func seedSessionUsagePricing(t *testing.T, d *db.DB) {
 		CacheCreationPerMTok: 3.75,
 		CacheReadPerMTok:     0.30,
 	}}))
+}
+
+func assertSessionUsageError(
+	t *testing.T,
+	w *httptest.ResponseRecorder,
+	code string,
+	message string,
+) {
+	t.Helper()
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, map[string]any{
+		"error": map[string]any{
+			"code":    code,
+			"message": message,
+		},
+	}, got)
 }
