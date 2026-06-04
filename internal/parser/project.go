@@ -459,36 +459,42 @@ func findGitRepoRoot(ctx context.Context, cwd string) string {
 		}
 	}
 
-	if root := findGitRepoRootLocal(dir); root != "" {
+	root, conservative := findGitRepoRootLocal(dir)
+	if root != "" && !conservative {
 		return root
 	}
 	if !cwdMissing {
-		return gitMainRoot(ctx, startDir)
+		if gitRoot := gitMainRoot(ctx, startDir); gitRoot != "" {
+			return gitRoot
+		}
 	}
-	return ""
+	return root
 }
 
-func findGitRepoRootLocal(dir string) string {
+func findGitRepoRootLocal(dir string) (root string, conservative bool) {
 	for {
 		gitPath := filepath.Join(dir, ".git")
 		info, err := osStat(gitPath)
 		if err == nil {
 			if info.IsDir() {
-				return dir
+				return dir, false
 			}
 			if info.Mode().IsRegular() {
 				if root := repoRootFromGitFile(dir, gitPath); root != "" {
-					return root
+					if root == dir {
+						return root, true
+					}
+					return root, false
 				}
 				// Keep conservative fallback for gitfile repos
 				// when metadata cannot be parsed.
-				return dir
+				return dir, true
 			}
 		}
 
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return ""
+			return "", false
 		}
 		dir = parent
 	}

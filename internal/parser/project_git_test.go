@@ -159,6 +159,45 @@ func TestExtractProjectFromCwdFallsBackToGitWhenLocalWalkMisses(t *testing.T) {
 	assert.FileExists(t, gitLog, "git fallback should be used when local walk misses")
 }
 
+func TestExtractProjectFromCwdTriesGitBeforeConservativeGitFileFallback(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a POSIX shell git shim")
+	}
+
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	mustMkdirAll(t, binDir)
+	gitLog := filepath.Join(root, "git-log")
+	mainRepo := filepath.Join(root, "main-repo")
+	worktree := filepath.Join(root, "feature-worktree")
+	cwd := filepath.Join(worktree, "internal", "parser")
+	commonDir := filepath.Join(mainRepo, ".git")
+	externalGitDir := filepath.Join(root, "bare-common", "worktrees", "feature")
+	mustMkdirAll(t, commonDir)
+	mustMkdirAll(t, externalGitDir)
+	mustMkdirAll(t, cwd)
+	mustWriteFile(t, filepath.Join(worktree, ".git"),
+		"gitdir: "+externalGitDir+"\n")
+
+	fakeGit := filepath.Join(binDir, "git")
+	mustWriteFile(t, fakeGit, "#!/bin/sh\n"+
+		"echo \"$*\" >> "+shellQuote(gitLog)+"\n"+
+		"case \"$*\" in\n"+
+		"  'rev-parse --git-dir') echo "+shellQuote(externalGitDir)+" ;;\n"+
+		"  'rev-parse --git-common-dir') echo "+shellQuote(commonDir)+" ;;\n"+
+		"  *) exit 1 ;;\n"+
+		"esac\n")
+	require.NoError(t, os.Chmod(fakeGit, 0o755), "chmod fake git")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	assert.Equal(t, "main_repo",
+		ExtractProjectFromCwdWithBranchContext(context.Background(), cwd, ""))
+	assert.FileExists(t, gitLog,
+		"git fallback should run before accepting conservative gitfile root")
+}
+
 func TestExtractProjectFromCwd_DeletedNestedWorktree(t *testing.T) {
 	// Simulates a nested worktree layout where the session's
 	// worktree has been deleted but a sibling worktree still
