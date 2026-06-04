@@ -1160,6 +1160,65 @@ func TestParseCodexSession_EdgeCases(t *testing.T) {
 	})
 }
 
+// TestParseCodexSession_DeduplicatesReemittedPrompt covers Codex
+// re-emitting the initial user prompt verbatim when it continues a
+// task across turns (after tool use or a turn_aborted). The replay
+// must not inflate user_message_count past the single-turn gate that
+// drives automated-session classification, but a deliberate repeat
+// after a distinct user turn must be preserved.
+func TestParseCodexSession_DeduplicatesReemittedPrompt(t *testing.T) {
+	const prompt = "You are a code reviewer. Review the code changes shown below."
+
+	t.Run("drops re-emitted initial prompt", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("rev", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", prompt, tsEarlyS1),
+			testjsonl.CodexMsgJSON("assistant", "looking", "2024-01-01T10:00:02Z"),
+			testjsonl.CodexMsgJSON("user", prompt, "2024-01-01T10:00:03Z"),
+			testjsonl.CodexMsgJSON("assistant", "No issues found.", "2024-01-01T10:00:04Z"),
+		)
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+		require.NotNil(t, sess)
+		assert.Equal(t, 1, sess.UserMessageCount,
+			"re-emitted initial prompt must not count as a second user turn")
+		require.Len(t, msgs, 3)
+		assert.Equal(t, prompt, msgs[0].Content)
+		assert.Equal(t, RoleAssistant, msgs[1].Role)
+		assert.Equal(t, RoleAssistant, msgs[2].Role)
+	})
+
+	t.Run("drops re-emitted prompt after turn_aborted", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("rev", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", prompt, tsEarlyS1),
+			testjsonl.CodexMsgJSON("user", "<turn_aborted>\ninterrupted", "2024-01-01T10:00:02Z"),
+			testjsonl.CodexMsgJSON("user", prompt, "2024-01-01T10:00:03Z"),
+			testjsonl.CodexMsgJSON("assistant", "No issues found.", "2024-01-01T10:00:04Z"),
+		)
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+		require.NotNil(t, sess)
+		assert.Equal(t, 1, sess.UserMessageCount,
+			"re-emitted prompt after a turn_aborted must not count as a second user turn")
+		require.Len(t, msgs, 2)
+		assert.Equal(t, prompt, msgs[0].Content)
+	})
+
+	t.Run("keeps a genuine repeat after a distinct user turn", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("chat", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", prompt, tsEarlyS1),
+			testjsonl.CodexMsgJSON("assistant", "ok", "2024-01-01T10:00:02Z"),
+			testjsonl.CodexMsgJSON("user", "something else entirely", "2024-01-01T10:00:03Z"),
+			testjsonl.CodexMsgJSON("assistant", "ok2", "2024-01-01T10:00:04Z"),
+			testjsonl.CodexMsgJSON("user", prompt, "2024-01-01T10:00:05Z"),
+		)
+		sess, _ := runCodexParserTest(t, "test.jsonl", content, false)
+		require.NotNil(t, sess)
+		assert.Equal(t, 3, sess.UserMessageCount,
+			"a deliberate repeat after a distinct user turn must be preserved")
+	})
+}
+
 // codexEventMsgJSON builds a Codex event_msg line for lifecycle
 // events like task_complete / task_started / turn_aborted. The
 // shape mirrors what the Codex CLI emits in real session files.

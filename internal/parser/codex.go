@@ -35,6 +35,8 @@ var errCodexIncrementalNeedsFullParse = errors.New(
 type codexSessionBuilder struct {
 	messages             []ParsedMessage
 	firstMessage         string
+	firstUserContent     string
+	sawDistinctUserTurn  bool
 	startedAt            time.Time
 	endedAt              time.Time
 	sessionID            string
@@ -164,10 +166,26 @@ func (b *codexSessionBuilder) handleResponseItem(
 		return
 	}
 
-	if role == "user" && b.firstMessage == "" {
-		b.firstMessage = truncate(
-			strings.ReplaceAll(content, "\n", " "), 300,
-		)
+	if role == "user" {
+		switch {
+		case b.firstUserContent == "":
+			b.firstUserContent = content
+			b.firstMessage = truncate(
+				strings.ReplaceAll(content, "\n", " "), 300,
+			)
+		case content == b.firstUserContent:
+			if !b.sawDistinctUserTurn {
+				// Codex re-emits the initial prompt verbatim when
+				// it continues a task across turns (after tool use
+				// or a turn_aborted). Drop the replay so it is not
+				// counted as a second user turn. A later identical
+				// message that follows a distinct user turn is a
+				// deliberate repeat and is kept.
+				return
+			}
+		default:
+			b.sawDistinctUserTurn = true
+		}
 	}
 
 	b.messages = append(b.messages, ParsedMessage{
