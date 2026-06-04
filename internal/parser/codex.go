@@ -35,6 +35,7 @@ var errCodexIncrementalNeedsFullParse = errors.New(
 type codexSessionBuilder struct {
 	messages             []ParsedMessage
 	firstMessage         string
+	firstUserContent     string
 	sawDistinctUserTurn  bool
 	startedAt            time.Time
 	endedAt              time.Time
@@ -166,21 +167,23 @@ func (b *codexSessionBuilder) handleResponseItem(
 	}
 
 	if role == "user" {
-		preview := FirstMessagePreview(content)
 		switch {
-		case b.firstMessage == "":
-			b.firstMessage = preview
-		case preview == b.firstMessage:
+		case b.firstUserContent == "":
+			b.firstUserContent = content
+			b.firstMessage = truncate(
+				strings.ReplaceAll(content, "\n", " "), 300,
+			)
+		case content == b.firstUserContent:
 			if !b.sawDistinctUserTurn {
 				// Codex re-emits the initial prompt verbatim when
 				// it continues a task across turns (after tool use
-				// or a turn_aborted). Drop the replay so it is not
-				// counted as a second user turn. A later identical
-				// message that follows a distinct user turn is a
-				// deliberate repeat and is kept. Dedup compares the
-				// preview form (not full content) so the state is a
-				// single value the incremental parser can rebuild by
-				// re-previewing the file prefix (seedCodexUserDedup).
+				// or a turn_aborted). Drop the verbatim replay so it
+				// is not counted as a second user turn. A later
+				// identical message that follows a distinct user turn
+				// is a deliberate repeat and is kept. The match is on
+				// full content, not the truncated preview, so a
+				// distinct prompt that merely shares the first 300
+				// runes is not dropped.
 				return
 			}
 		default:
@@ -1284,25 +1287,16 @@ func readCodexModelAtOffset(
 	return model
 }
 
-// FirstMessagePreview normalizes message content into the stored
-// first_message preview form: newlines collapsed to spaces, trimmed,
-// and truncated to 300 runes. Exposed so the incremental Codex parser
-// can match a re-emitted prompt against the persisted preview when it
-// seeds dedup state.
-func FirstMessagePreview(content string) string {
-	return truncate(strings.ReplaceAll(content, "\n", " "), 300)
-}
-
 // seedCodexUserDedup scans a Codex JSONL prefix [0, offset) to recover
 // the state the re-emitted-prompt dedup needs when resuming an
-// incremental parse: the preview of the first real user message and
-// whether a second, distinct user turn already occurred. It mirrors
-// handleResponseItem's user-message filtering so the incremental path
-// dedups re-emitted prompts identically to a full parse, and
-// early-exits once a distinct turn is found.
+// incremental parse: the full content of the first real user message
+// and whether a second, distinct user turn already occurred. It mirrors
+// handleResponseItem's user-message filtering and full-content matching
+// so the incremental path dedups re-emitted prompts identically to a
+// full parse, and early-exits once a distinct turn is found.
 func seedCodexUserDedup(
 	path string, offset int64,
-) (firstPreview string, sawDistinct bool) {
+) (firstContent string, sawDistinct bool) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", false
@@ -1333,14 +1327,13 @@ func seedCodexUserDedup(
 			isCodexSystemMessage(content) {
 			continue
 		}
-		preview := FirstMessagePreview(content)
-		if firstPreview == "" {
-			firstPreview = preview
-		} else if preview != firstPreview {
-			return firstPreview, true
+		if firstContent == "" {
+			firstContent = content
+		} else if content != firstContent {
+			return firstContent, true
 		}
 	}
-	return firstPreview, false
+	return firstContent, false
 }
 
 // ParseCodexSessionFrom parses only new lines from a Codex
@@ -1360,7 +1353,7 @@ func ParseCodexSessionFrom(
 	// Recover the re-emitted-prompt dedup state from the already-parsed
 	// prefix so a replay appended across syncs is dropped just as a
 	// full parse would.
-	b.firstMessage, b.sawDistinctUserTurn = seedCodexUserDedup(
+	b.firstUserContent, b.sawDistinctUserTurn = seedCodexUserDedup(
 		path, offset,
 	)
 	var fallbackErr error

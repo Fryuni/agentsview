@@ -2,6 +2,7 @@ package parser
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1216,6 +1217,25 @@ func TestParseCodexSession_DeduplicatesReemittedPrompt(t *testing.T) {
 		require.NotNil(t, sess)
 		assert.Equal(t, 3, sess.UserMessageCount,
 			"a deliberate repeat after a distinct user turn must be preserved")
+	})
+
+	t.Run("keeps distinct prompts that share the first 300 runes", func(t *testing.T) {
+		// Two different prompts whose first 300 runes are identical
+		// collapse to the same first_message preview. The dedup must
+		// match on full content, not the preview, so the second turn
+		// is recognised as distinct and kept rather than dropped as a
+		// replay.
+		shared := strings.Repeat("x", 300)
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("chat", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", shared+" first", tsEarlyS1),
+			testjsonl.CodexMsgJSON("assistant", "ok", "2024-01-01T10:00:02Z"),
+			testjsonl.CodexMsgJSON("user", shared+" second", "2024-01-01T10:00:03Z"),
+		)
+		sess, _ := runCodexParserTest(t, "test.jsonl", content, false)
+		require.NotNil(t, sess)
+		assert.Equal(t, 2, sess.UserMessageCount,
+			"distinct prompts sharing only the 300-rune preview must both be kept")
 	})
 }
 
