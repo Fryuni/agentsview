@@ -6581,9 +6581,11 @@ func TestIncrementalSync_CodexReemittedPromptDedupedOnAppend(t *testing.T) {
 	require.True(t, full.IsAutomated,
 		"initial IsAutomated = false, want true for reviewer prompt")
 
-	// Codex continues the turn and re-emits the same prompt
-	// verbatim, then adds a fresh assistant reply.
+	// Codex continues after an interrupted turn, re-emits the
+	// same prompt verbatim, then adds a fresh assistant reply.
 	appended := testjsonl.CodexMsgJSON(
+		"user", "<turn_aborted>\ninterrupted", "2024-01-01T10:00:59Z",
+	) + "\n" + testjsonl.CodexMsgJSON(
 		"user", prompt, "2024-01-01T10:01:00Z",
 	) + "\n" + testjsonl.CodexMsgJSON(
 		"assistant", "Still good.", "2024-01-01T10:01:05Z",

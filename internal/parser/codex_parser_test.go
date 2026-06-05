@@ -1163,14 +1163,14 @@ func TestParseCodexSession_EdgeCases(t *testing.T) {
 
 // TestParseCodexSession_DeduplicatesReemittedPrompt covers Codex
 // re-emitting the initial user prompt verbatim when it continues a
-// task across turns (after tool use or a turn_aborted). The replay
-// must not inflate user_message_count past the single-turn gate that
-// drives automated-session classification, but a deliberate repeat
-// after a distinct user turn must be preserved.
+// task after a turn_aborted signal. The replay must not inflate
+// user_message_count past the single-turn gate that drives
+// automated-session classification, but a normal repeated prompt
+// must be preserved unless the parser has a positive replay signal.
 func TestParseCodexSession_DeduplicatesReemittedPrompt(t *testing.T) {
 	const prompt = "You are a code reviewer. Review the code changes shown below."
 
-	t.Run("drops re-emitted initial prompt", func(t *testing.T) {
+	t.Run("keeps repeated initial prompt without replay signal", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
 			testjsonl.CodexSessionMetaJSON("rev", "/tmp", "user", tsEarly),
 			testjsonl.CodexMsgJSON("user", prompt, tsEarlyS1),
@@ -1180,12 +1180,13 @@ func TestParseCodexSession_DeduplicatesReemittedPrompt(t *testing.T) {
 		)
 		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
 		require.NotNil(t, sess)
-		assert.Equal(t, 1, sess.UserMessageCount,
-			"re-emitted initial prompt must not count as a second user turn")
-		require.Len(t, msgs, 3)
+		assert.Equal(t, 2, sess.UserMessageCount,
+			"repeated prompt without a replay signal must count as a real user turn")
+		require.Len(t, msgs, 4)
 		assert.Equal(t, prompt, msgs[0].Content)
 		assert.Equal(t, RoleAssistant, msgs[1].Role)
-		assert.Equal(t, RoleAssistant, msgs[2].Role)
+		assert.Equal(t, prompt, msgs[2].Content)
+		assert.Equal(t, RoleAssistant, msgs[3].Role)
 	})
 
 	t.Run("drops re-emitted prompt after turn_aborted", func(t *testing.T) {
@@ -1391,10 +1392,10 @@ func TestParseCodexSessionFrom_Incremental(t *testing.T) {
 
 // TestParseCodexSessionFrom_DedupsReemittedPrompt covers the
 // incremental-sync case of the re-emitted-prompt dedup: when Codex
-// appends a verbatim replay of the initial prompt after the session
-// was already synced, the incremental parser must recover the prior
-// context (first-prompt preview, whether a distinct turn occurred) and
-// drop the replay, mirroring a full parse.
+// appends a positive replay signal followed by a verbatim replay of
+// the initial prompt after the session was already synced, the
+// incremental parser must recover the prior context and drop the
+// replay, mirroring a full parse.
 func TestParseCodexSessionFrom_DedupsReemittedPrompt(t *testing.T) {
 	const prompt = "You are a code reviewer. Review the code changes shown below."
 
@@ -1407,7 +1408,7 @@ func TestParseCodexSessionFrom_DedupsReemittedPrompt(t *testing.T) {
 		require.NoError(t, f.Close())
 	}
 
-	t.Run("drops a re-emitted prompt appended after first sync", func(t *testing.T) {
+	t.Run("keeps repeated prompt appended without replay signal", func(t *testing.T) {
 		initial := testjsonl.JoinJSONL(
 			testjsonl.CodexSessionMetaJSON("inc-rev", "/tmp", "codex_cli_rs", tsEarly),
 			testjsonl.CodexMsgJSON("user", prompt, tsEarlyS1),
@@ -1424,6 +1425,36 @@ func TestParseCodexSessionFrom_DedupsReemittedPrompt(t *testing.T) {
 		offset := info.Size()
 
 		appendLines(t, path, testjsonl.JoinJSONL(
+			testjsonl.CodexMsgJSON("user", prompt, tsLate),
+			testjsonl.CodexMsgJSON("assistant", "No issues found.", tsLateS5),
+		))
+
+		newMsgs, _, _, err := ParseCodexSessionFrom(path, offset, len(msgs), false)
+		require.NoError(t, err)
+		require.Len(t, newMsgs, 2)
+		assert.Equal(t, RoleUser, newMsgs[0].Role)
+		assert.Equal(t, prompt, newMsgs[0].Content)
+		assert.Equal(t, RoleAssistant, newMsgs[1].Role)
+	})
+
+	t.Run("drops a re-emitted prompt appended after turn_aborted", func(t *testing.T) {
+		initial := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("inc-rev", "/tmp", "codex_cli_rs", tsEarly),
+			testjsonl.CodexMsgJSON("user", prompt, tsEarlyS1),
+			testjsonl.CodexMsgJSON("assistant", "looking", tsEarlyS5),
+		)
+		path := createTestFile(t, "incremental.jsonl", initial)
+		sess, msgs, err := ParseCodexSession(path, "local", false)
+		require.NoError(t, err)
+		require.Equal(t, 1, sess.UserMessageCount)
+		require.Len(t, msgs, 2)
+
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		offset := info.Size()
+
+		appendLines(t, path, testjsonl.JoinJSONL(
+			testjsonl.CodexMsgJSON("user", "<turn_aborted>\ninterrupted", tsLate),
 			testjsonl.CodexMsgJSON("user", prompt, tsLate),
 			testjsonl.CodexMsgJSON("assistant", "No issues found.", tsLateS5),
 		))

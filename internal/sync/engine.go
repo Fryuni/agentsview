@@ -2660,9 +2660,12 @@ func (e *Engine) collectAndBatch(
 			}
 			continue
 		}
-		if len(r.excludedSessionIDs) > 0 {
+		excludedSessionIDs := e.applyIDPrefixToSessionIDs(
+			r.excludedSessionIDs,
+		)
+		if len(excludedSessionIDs) > 0 {
 			if _, err := e.db.DeleteParserExcludedSessions(
-				r.excludedSessionIDs,
+				excludedSessionIDs,
 			); err != nil {
 				log.Printf("delete parser-excluded sessions: %v", err)
 				stats.RecordFailed()
@@ -2670,7 +2673,7 @@ func (e *Engine) collectAndBatch(
 			}
 			stats.parserExcludedIDs = append(
 				stats.parserExcludedIDs,
-				r.excludedSessionIDs...,
+				excludedSessionIDs...,
 			)
 		}
 		if len(r.results) == 0 && r.incremental == nil {
@@ -5021,6 +5024,21 @@ func countToolResultEvents(calls []db.ToolCall) int {
 		total += len(call.ResultEvents)
 	}
 	return total
+}
+
+func (e *Engine) applyIDPrefixToSessionIDs(ids []string) []string {
+	if e.idPrefix == "" || len(ids) == 0 {
+		return ids
+	}
+	prefixed := make([]string, len(ids))
+	for i, id := range ids {
+		if id == "" || strings.HasPrefix(id, e.idPrefix) {
+			prefixed[i] = id
+			continue
+		}
+		prefixed[i] = e.idPrefix + id
+	}
+	return prefixed
 }
 
 // applyRemoteRewrites prefixes session IDs and rewrites
