@@ -10,6 +10,20 @@ import (
 	"time"
 )
 
+type sqlContextExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+// execWithoutCancel runs cleanup SQL even if the operation context was canceled.
+func execWithoutCancel(
+	ctx context.Context,
+	execer sqlContextExecer,
+	query string,
+	args ...any,
+) (sql.Result, error) {
+	return execer.ExecContext(context.WithoutCancel(ctx), query, args...)
+}
+
 // CopyOrphanedDataFrom copies sessions (and their messages
 // and tool_calls) that exist in the source database but not
 // in this database. This preserves archived sessions whose
@@ -59,8 +73,10 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		)
 	}
 	defer func() {
-		_, _ = conn.ExecContext(
-			ctx, "DETACH DATABASE old_db",
+		_, _ = execWithoutCancel(
+			ctx,
+			conn,
+			"DETACH DATABASE old_db",
 		)
 	}()
 
@@ -74,8 +90,9 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		)
 	}
 	defer func() {
-		_, _ = conn.ExecContext(
+		_, _ = execWithoutCancel(
 			ctx,
+			conn,
 			"DROP TABLE IF EXISTS _extra_excluded_orphan_ids",
 		)
 	}()
@@ -136,8 +153,9 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		)
 	}
 	defer func() {
-		_, _ = conn.ExecContext(
+		_, _ = execWithoutCancel(
 			ctx,
+			conn,
 			"DROP TABLE IF EXISTS _orphaned_ids",
 		)
 	}()
