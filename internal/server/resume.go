@@ -25,10 +25,10 @@ import (
 
 // resumeRequest is the JSON body for POST /api/v1/sessions/{id}/resume.
 type resumeRequest struct {
-	SkipPermissions bool   `json:"skip_permissions"`
-	ForkSession     bool   `json:"fork_session"`
-	CommandOnly     bool   `json:"command_only"`
-	OpenerID        string `json:"opener_id"`
+	SkipPermissions bool   `json:"skip_permissions,omitempty"`
+	ForkSession     bool   `json:"fork_session,omitempty"`
+	CommandOnly     bool   `json:"command_only,omitempty"`
+	OpenerID        string `json:"opener_id,omitempty"`
 }
 
 // resumeResponse is the JSON response for a resume request.

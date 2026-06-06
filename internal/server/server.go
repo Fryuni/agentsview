@@ -218,6 +218,11 @@ func (s *Server) humaConfig() huma.Config {
 	cfg.OpenAPIPath = "/api/openapi"
 	cfg.DocsPath = ""
 	cfg.SchemasPath = ""
+	cfg.CreateHooks = nil
+	cfg.Components.Schemas = huma.NewMapRegistry(
+		"#/components/schemas/",
+		agentsViewSchemaNamer,
+	)
 	if s.basePath != "" {
 		cfg.Servers = []*huma.Server{{
 			URL:         s.basePath,
@@ -225,157 +230,6 @@ func (s *Server) humaConfig() huma.Config {
 		}}
 	}
 	return cfg
-}
-
-func (s *Server) apiRoute(
-	method, path, summary string,
-	handler http.Handler,
-	options ...func(*huma.Operation),
-) {
-	op := &huma.Operation{
-		OperationID:        operationID(method, path),
-		Method:             method,
-		Path:               path,
-		Summary:            summary,
-		Tags:               []string{operationTag(path)},
-		Parameters:         pathParameters(path),
-		RequestBody:        defaultRequestBody(method),
-		Responses:          defaultResponses("application/json"),
-		SkipValidateParams: true,
-		SkipValidateBody:   true,
-	}
-	for _, option := range options {
-		option(op)
-	}
-	if !op.Hidden {
-		s.api.OpenAPI().AddOperation(op)
-	}
-	s.api.Adapter().Handle(op, func(ctx huma.Context) {
-		r, w := humago.Unwrap(ctx)
-		handler.ServeHTTP(w, r)
-	})
-}
-
-func withResponseContent(contentType string) func(*huma.Operation) {
-	return func(op *huma.Operation) {
-		op.Responses = defaultResponses(contentType)
-	}
-}
-
-func withNoRequestBody() func(*huma.Operation) {
-	return func(op *huma.Operation) {
-		op.RequestBody = nil
-	}
-}
-
-func withRequestContent(contentType string) func(*huma.Operation) {
-	return func(op *huma.Operation) {
-		op.RequestBody = &huma.RequestBody{
-			Content: map[string]*huma.MediaType{
-				contentType: {Schema: genericObjectSchema()},
-			},
-		}
-	}
-}
-
-func defaultRequestBody(method string) *huma.RequestBody {
-	switch method {
-	case http.MethodPost, http.MethodPut, http.MethodPatch:
-		return &huma.RequestBody{
-			Content: map[string]*huma.MediaType{
-				"application/json": {Schema: genericObjectSchema()},
-			},
-		}
-	default:
-		return nil
-	}
-}
-
-func defaultResponses(contentType string) map[string]*huma.Response {
-	successSchema := genericObjectSchema()
-	if contentType == "text/event-stream" ||
-		strings.HasPrefix(contentType, "text/") {
-		successSchema = &huma.Schema{Type: huma.TypeString}
-	}
-	if contentType == "application/octet-stream" ||
-		strings.HasPrefix(contentType, "image/") {
-		successSchema = &huma.Schema{
-			Type:   huma.TypeString,
-			Format: "binary",
-		}
-	}
-	return map[string]*huma.Response{
-		"200": responseWithContent("OK", contentType, successSchema),
-		"201": responseWithContent(
-			"Created", "application/json", genericObjectSchema(),
-		),
-		"204": {Description: "No Content"},
-		"400": errorResponse("Bad Request"),
-		"401": errorResponse("Unauthorized"),
-		"403": errorResponse("Forbidden"),
-		"404": errorResponse("Not Found"),
-		"409": errorResponse("Conflict"),
-		"500": errorResponse("Internal Server Error"),
-		"501": errorResponse("Not Implemented"),
-		"503": errorResponse("Service Unavailable"),
-		"504": errorResponse("Gateway Timeout"),
-	}
-}
-
-func responseWithContent(
-	description, contentType string,
-	schema *huma.Schema,
-) *huma.Response {
-	return &huma.Response{
-		Description: description,
-		Content: map[string]*huma.MediaType{
-			contentType: {Schema: schema},
-		},
-	}
-}
-
-func errorResponse(description string) *huma.Response {
-	return responseWithContent(
-		description,
-		"application/json",
-		&huma.Schema{
-			Type: huma.TypeObject,
-			Properties: map[string]*huma.Schema{
-				"error": {Type: huma.TypeString},
-			},
-			Required: []string{"error"},
-		},
-	)
-}
-
-func genericObjectSchema() *huma.Schema {
-	return &huma.Schema{
-		Type:                 huma.TypeObject,
-		AdditionalProperties: true,
-	}
-}
-
-func pathParameters(path string) []*huma.Param {
-	var params []*huma.Param
-	for rest := path; ; {
-		start := strings.Index(rest, "{")
-		if start == -1 {
-			return params
-		}
-		rest = rest[start+1:]
-		end := strings.Index(rest, "}")
-		if end == -1 {
-			return params
-		}
-		name := rest[:end]
-		params = append(params, &huma.Param{
-			Name:     name,
-			In:       "path",
-			Required: true,
-			Schema:   &huma.Schema{Type: huma.TypeString},
-		})
-		rest = rest[end+1:]
-	}
 }
 
 func operationID(method, path string) string {
@@ -448,113 +302,9 @@ func operationTag(path string) string {
 }
 
 func (s *Server) routes() {
+	configureHumaErrors()
 	s.api = humago.New(s.mux, s.humaConfig())
-
-	s.apiRoute(
-		http.MethodGet,
-		"/api/ping",
-		"Ping daemon",
-		daemon.NewPingHandler(daemon.PingHandlerOptions{
-			Service: daemonService,
-			Version: s.version.Version,
-		}),
-	)
-
-	// API v1 routes
-	s.apiRoute(http.MethodGet, "/api/v1/sessions", "List sessions", s.withTimeout(s.handleListSessions), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/sessions/sidebar-index", "List sidebar sessions", s.withTimeout(s.handleSidebarSessionIndex), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/sessions/{id}", "Get session", s.withTimeout(s.handleGetSession), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/sessions/{id}/messages", "List session messages", s.withTimeout(s.handleGetMessages), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/sessions/{id}/tool-calls", "List session tool calls", s.withTimeout(s.handleToolCalls), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/sessions/{id}/children", "List child sessions", s.withTimeout(s.handleGetChildSessions), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/sessions/{id}/activity", "Get session activity", s.withTimeout(s.handleGetSessionActivity), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/sessions/{id}/timing", "Get session timing", s.withTimeout(s.handleSessionTiming), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/sessions/{id}/usage", "Get session usage", s.withTimeout(s.handleSessionUsage), withNoRequestBody())
-	// SSE: Do not use timeout, as this is a long-lived connection.
-	s.apiRoute(http.MethodGet, "/api/v1/sessions/{id}/watch", "Watch session events", http.HandlerFunc(s.handleWatchSession), withNoRequestBody(), withResponseContent("text/event-stream"))
-	// SSE: Do not use timeout, as this is a long-lived connection.
-	s.apiRoute(http.MethodGet, "/api/v1/events", "Watch server events", http.HandlerFunc(s.handleEvents), withNoRequestBody(), withResponseContent("text/event-stream"))
-	// Export: Do not use timeout handler to support large downloads and avoid buffering.
-	s.apiRoute(http.MethodGet, "/api/v1/sessions/{id}/export", "Export session as HTML", http.HandlerFunc(s.handleExportSession), withNoRequestBody(), withResponseContent("text/html"))
-	s.apiRoute(http.MethodGet, "/api/v1/sessions/{id}/md", "Export session as Markdown", http.HandlerFunc(s.handleMarkdownSession), withNoRequestBody(), withResponseContent("text/markdown"))
-	s.apiRoute(http.MethodPost, "/api/v1/sessions/{id}/publish", "Publish session", s.withTimeout(s.handlePublishSession))
-	s.apiRoute(http.MethodPost, "/api/v1/sessions/{id}/resume", "Resume session", s.withTimeout(s.handleResumeSession))
-	s.apiRoute(http.MethodGet, "/api/v1/openers", "List openers", s.withTimeout(s.handleListOpeners), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/sessions/{id}/directory", "Get session directory", s.withTimeout(s.handleGetSessionDir), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/sessions/{id}/search", "Search within a session", s.withTimeout(s.handleSearchSession), withNoRequestBody())
-	s.apiRoute(http.MethodPost, "/api/v1/sessions/{id}/open", "Open session directory", s.withTimeout(s.handleOpenSession))
-	s.apiRoute(http.MethodPost, "/api/v1/sessions/sync", "Sync a session", s.withTimeout(s.handleSyncSession))
-	s.apiRoute(http.MethodPost, "/api/v1/sessions/upload", "Upload a session export", s.withTimeout(s.handleUploadSession), withRequestContent("multipart/form-data"))
-	s.apiRoute(http.MethodGet, "/api/v1/analytics/summary", "Get analytics summary", s.withTimeout(s.handleAnalyticsSummary), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/analytics/activity", "Get analytics activity", s.withTimeout(s.handleAnalyticsActivity), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/analytics/heatmap", "Get analytics heatmap", s.withTimeout(s.handleAnalyticsHeatmap), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/analytics/projects", "Get analytics by project", s.withTimeout(s.handleAnalyticsProjects), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/analytics/hour-of-week", "Get analytics by hour of week", s.withTimeout(s.handleAnalyticsHourOfWeek), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/analytics/sessions", "Get session shape analytics", s.withTimeout(s.handleAnalyticsSessionShape), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/analytics/velocity", "Get velocity analytics", s.withTimeout(s.handleAnalyticsVelocity), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/analytics/tools", "Get tool analytics", s.withTimeout(s.handleAnalyticsTools), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/analytics/top-sessions", "Get top sessions", s.withTimeout(s.handleAnalyticsTopSessions), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/analytics/signals", "Get signal analytics", s.withTimeout(s.handleAnalyticsSignals), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/trends/terms", "Get trend terms", s.withTimeout(s.handleTrendsTerms), withNoRequestBody())
-
-	s.apiRoute(http.MethodGet, "/api/v1/usage/summary", "Get usage summary", s.withTimeout(s.handleUsageSummary), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/usage/top-sessions", "Get top usage sessions", s.withTimeout(s.handleUsageTopSessions), withNoRequestBody())
-
-	s.apiRoute(http.MethodGet, "/api/v1/insights", "List insights", s.withTimeout(s.handleListInsights), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/insights/{id}", "Get insight", s.withTimeout(s.handleGetInsight), withNoRequestBody())
-	s.apiRoute(http.MethodDelete, "/api/v1/insights/{id}", "Delete insight", s.withTimeout(s.handleDeleteInsight))
-	s.apiRoute(http.MethodPost, "/api/v1/insights/generate", "Generate insight", http.HandlerFunc(s.handleGenerateInsight), withResponseContent("text/event-stream"))
-
-	s.apiRoute(http.MethodGet, "/api/v1/search", "Search sessions", s.withTimeout(s.handleSearch), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/search/content", "Search session content", s.withTimeout(s.handleSearchContent), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/secrets", "List secret findings", s.withTimeout(s.handleListSecrets), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/projects", "List projects", s.withTimeout(s.handleListProjects), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/machines", "List machines", s.withTimeout(s.handleListMachines), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/agents", "List agents", s.withTimeout(s.handleListAgents), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/stats", "Get stats", s.withTimeout(s.handleGetStats), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/version", "Get server version", s.withTimeout(s.handleGetVersion), withNoRequestBody())
-	s.apiRoute(http.MethodPost, "/api/v1/secrets/scan", "Scan secrets", http.HandlerFunc(s.handleScanSecrets), withResponseContent("text/event-stream"))
-	s.apiRoute(http.MethodPost, "/api/v1/sync", "Trigger sync", http.HandlerFunc(s.handleTriggerSync), withNoRequestBody())
-	s.apiRoute(http.MethodPost, "/api/v1/resync", "Trigger full resync", http.HandlerFunc(s.handleTriggerResync), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/sync/status", "Get sync status", s.withTimeout(s.handleSyncStatus), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/config/github", "Get GitHub config", s.withTimeout(s.handleGetGithubConfig), withNoRequestBody())
-	s.apiRoute(http.MethodPost, "/api/v1/config/github", "Set GitHub config", s.withTimeout(s.handleSetGithubConfig))
-	s.apiRoute(http.MethodGet, "/api/v1/config/terminal", "Get terminal config", s.withTimeout(s.handleGetTerminalConfig), withNoRequestBody())
-	s.apiRoute(http.MethodPost, "/api/v1/config/terminal", "Set terminal config", s.withTimeout(s.handleSetTerminalConfig))
-	s.apiRoute(http.MethodGet, "/api/v1/update/check", "Check for updates", s.withTimeout(s.handleCheckUpdate), withNoRequestBody())
-
-	s.apiRoute(http.MethodGet, "/api/v1/settings", "Get settings", s.withTimeout(s.handleGetSettings), withNoRequestBody())
-	s.apiRoute(http.MethodPut, "/api/v1/settings", "Update settings", s.withTimeout(s.handleUpdateSettings))
-	s.apiRoute(http.MethodGet, "/api/v1/settings/worktree-mappings", "List worktree mappings", s.withTimeout(s.handleListWorktreeMappings), withNoRequestBody())
-	s.apiRoute(http.MethodPost, "/api/v1/settings/worktree-mappings", "Create worktree mapping", s.withTimeout(s.handleCreateWorktreeMapping))
-	s.apiRoute(http.MethodPut, "/api/v1/settings/worktree-mappings/{id}", "Update worktree mapping", s.withTimeout(s.handleUpdateWorktreeMapping))
-	s.apiRoute(http.MethodDelete, "/api/v1/settings/worktree-mappings/{id}", "Delete worktree mapping", s.withTimeout(s.handleDeleteWorktreeMapping))
-	s.apiRoute(http.MethodPost, "/api/v1/settings/worktree-mappings/apply", "Apply worktree mappings", s.withTimeout(s.handleApplyWorktreeMappings), withNoRequestBody())
-
-	s.apiRoute(http.MethodGet, "/api/v1/starred", "List starred sessions", s.withTimeout(s.handleListStarred), withNoRequestBody())
-	s.apiRoute(http.MethodPut, "/api/v1/sessions/{id}/star", "Star session", s.withTimeout(s.handleStarSession), withNoRequestBody())
-	s.apiRoute(http.MethodDelete, "/api/v1/sessions/{id}/star", "Unstar session", s.withTimeout(s.handleUnstarSession))
-	s.apiRoute(http.MethodPost, "/api/v1/starred/bulk", "Bulk star sessions", s.withTimeout(s.handleBulkStar))
-
-	// Session management
-	s.apiRoute(http.MethodPatch, "/api/v1/sessions/{id}/rename", "Rename session", s.withTimeout(s.handleRenameSession))
-	s.apiRoute(http.MethodDelete, "/api/v1/sessions/{id}", "Delete session", s.withTimeout(s.handleDeleteSession))
-	s.apiRoute(http.MethodPost, "/api/v1/sessions/{id}/restore", "Restore session", s.withTimeout(s.handleRestoreSession), withNoRequestBody())
-	s.apiRoute(http.MethodDelete, "/api/v1/sessions/{id}/permanent", "Permanently delete session", s.withTimeout(s.handlePermanentDeleteSession))
-	s.apiRoute(http.MethodGet, "/api/v1/trash", "List trash", s.withTimeout(s.handleListTrash), withNoRequestBody())
-	s.apiRoute(http.MethodDelete, "/api/v1/trash", "Empty trash", s.withTimeout(s.handleEmptyTrash))
-
-	// Pinned messages
-	s.apiRoute(http.MethodGet, "/api/v1/pins", "List pins", s.withTimeout(s.handleListPins), withNoRequestBody())
-	s.apiRoute(http.MethodGet, "/api/v1/sessions/{id}/pins", "List session pins", s.withTimeout(s.handleListSessionPins), withNoRequestBody())
-	s.apiRoute(http.MethodPost, "/api/v1/sessions/{id}/messages/{messageId}/pin", "Pin message", s.withTimeout(s.handlePinMessage))
-	s.apiRoute(http.MethodDelete, "/api/v1/sessions/{id}/messages/{messageId}/pin", "Unpin message", s.withTimeout(s.handleUnpinMessage))
-	// Import: no timeout wrapper (large files may take longer).
-	s.apiRoute(http.MethodPost, "/api/v1/import/claude-ai", "Import Claude.ai archive", http.HandlerFunc(s.handleImportClaudeAI), withRequestContent("multipart/form-data"))
-	// ChatGPT import: no timeout wrapper.
-	s.apiRoute(http.MethodPost, "/api/v1/import/chatgpt", "Import ChatGPT archive", http.HandlerFunc(s.handleImportChatGPT), withRequestContent("multipart/form-data"))
-	// Assets: no timeout wrapper (static files).
-	s.apiRoute(http.MethodGet, "/api/v1/assets/{filename}", "Get imported asset", http.HandlerFunc(s.handleGetAsset), withNoRequestBody(), withResponseContent("image/*"))
+	s.registerTypedAPIRoutes()
 
 	// SPA fallback: serve embedded frontend
 	// Do not use timeout handler for static assets to avoid buffering.

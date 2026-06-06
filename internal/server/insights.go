@@ -129,9 +129,9 @@ type generateInsightRequest struct {
 	Type     string `json:"type"`
 	DateFrom string `json:"date_from"`
 	DateTo   string `json:"date_to"`
-	Project  string `json:"project"`
-	Prompt   string `json:"prompt"`
-	Agent    string `json:"agent"`
+	Project  string `json:"project,omitempty"`
+	Prompt   string `json:"prompt,omitempty"`
+	Agent    string `json:"agent,omitempty"`
 }
 
 func insightGenerateClientMessage(
