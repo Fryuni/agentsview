@@ -481,8 +481,45 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 	w := te.get(t, "/api/openapi.json")
 
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	var spec map[string]any
+	type openAPISchema struct {
+		Ref        string                   `json:"$ref"`
+		Enum       []string                 `json:"enum"`
+		Properties map[string]openAPISchema `json:"properties"`
+	}
+	type openAPIParameter struct {
+		Name   string        `json:"name"`
+		In     string        `json:"in"`
+		Schema openAPISchema `json:"schema"`
+	}
+	type openAPIRequestBody struct {
+		Content map[string]struct {
+			Schema openAPISchema `json:"schema"`
+		} `json:"content"`
+	}
+	type openAPIOperation struct {
+		Parameters  []openAPIParameter  `json:"parameters"`
+		RequestBody *openAPIRequestBody `json:"requestBody"`
+	}
+	var spec struct {
+		Paths      map[string]map[string]openAPIOperation `json:"paths"`
+		Components struct {
+			Schemas map[string]openAPISchema `json:"schemas"`
+		} `json:"components"`
+	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+	resolveSchema := func(schema openAPISchema) openAPISchema {
+		if schema.Ref == "" {
+			return schema
+		}
+		const prefix = "#/components/schemas/"
+		require.True(t,
+			strings.HasPrefix(schema.Ref, prefix),
+			"unsupported schema ref %q", schema.Ref)
+		name := strings.TrimPrefix(schema.Ref, prefix)
+		resolved, ok := spec.Components.Schemas[name]
+		require.True(t, ok, "schema ref %q missing target", schema.Ref)
+		return resolved
+	}
 
 	for _, tt := range []struct {
 		path   string
@@ -527,160 +564,71 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 			want:   []string{"messages", "sessions", "output_tokens"},
 		},
 	} {
-		param := findOpenAPIParameter(t, spec, tt.path, tt.method, tt.name, "query")
-		schema, ok := param["schema"].(map[string]any)
-		require.True(t, ok, "%s %s %s missing schema", tt.method, tt.path, tt.name)
-		rawEnum, ok := schema["enum"].([]any)
-		require.True(t, ok, "%s %s %s missing enum", tt.method, tt.path, tt.name)
-		got := make([]string, 0, len(rawEnum))
-		for _, v := range rawEnum {
-			got = append(got, fmt.Sprint(v))
+		pathItem, ok := spec.Paths[tt.path]
+		require.True(t, ok, "spec missing path %s", tt.path)
+		op, ok := pathItem[tt.method]
+		require.True(t, ok, "spec missing operation %s %s", tt.method, tt.path)
+
+		var got []string
+		for _, param := range op.Parameters {
+			if param.Name == tt.name && param.In == "query" {
+				got = param.Schema.Enum
+				break
+			}
 		}
+		require.NotNil(t, got,
+			"%s %s missing query parameter %q", tt.method, tt.path, tt.name)
 		assert.Equal(t, tt.want, got)
 	}
 
-	requireRequestProperty(t, spec,
-		"/api/v1/sessions/{id}/rename", "patch", "display_name",
-	)
-	requireRequestProperty(t, spec,
-		"/api/v1/settings/worktree-mappings", "post", "path_prefix",
-	)
-	requireRequestProperty(t, spec,
-		"/api/v1/config/github", "post", "token",
-	)
-	assertRequestPropertyEnum(t, spec,
-		"/api/v1/config/terminal", "post", "mode",
-		[]string{"auto", "custom", "clipboard"},
-	)
-}
-
-func findOpenAPIParameter(
-	t *testing.T,
-	spec map[string]any,
-	path string,
-	method string,
-	name string,
-	in string,
-) map[string]any {
-	t.Helper()
-	op := openAPIOperation(t, spec, path, method)
-	params, ok := op["parameters"].([]any)
-	require.True(t, ok, "%s %s missing parameters", method, path)
-	for _, raw := range params {
-		param, ok := raw.(map[string]any)
-		require.True(t, ok, "%s %s has non-object parameter", method, path)
-		if param["name"] == name && param["in"] == in {
-			return param
-		}
+	for _, tt := range []struct {
+		path     string
+		method   string
+		property string
+	}{
+		{
+			path:     "/api/v1/sessions/{id}/rename",
+			method:   "patch",
+			property: "display_name",
+		},
+		{
+			path:     "/api/v1/settings/worktree-mappings",
+			method:   "post",
+			property: "path_prefix",
+		},
+		{
+			path:     "/api/v1/config/github",
+			method:   "post",
+			property: "token",
+		},
+	} {
+		pathItem, ok := spec.Paths[tt.path]
+		require.True(t, ok, "spec missing path %s", tt.path)
+		op, ok := pathItem[tt.method]
+		require.True(t, ok, "spec missing operation %s %s", tt.method, tt.path)
+		require.NotNil(t, op.RequestBody,
+			"%s %s missing requestBody", tt.method, tt.path)
+		jsonContent, ok := op.RequestBody.Content["application/json"]
+		require.True(t, ok,
+			"%s %s missing application/json body", tt.method, tt.path)
+		schema := resolveSchema(jsonContent.Schema)
+		require.Contains(t, schema.Properties, tt.property)
 	}
-	require.Failf(t, "parameter missing",
-		"%s %s missing %s parameter %q", method, path, in, name)
-	return nil
-}
 
-func requireRequestProperty(
-	t *testing.T,
-	spec map[string]any,
-	path string,
-	method string,
-	property string,
-) {
-	t.Helper()
-	schema := requestBodySchema(t, spec, path, method)
-	properties, ok := schema["properties"].(map[string]any)
-	require.True(t, ok, "%s %s missing request properties", method, path)
-	require.Contains(t, properties, property)
-}
-
-func assertRequestPropertyEnum(
-	t *testing.T,
-	spec map[string]any,
-	path string,
-	method string,
-	property string,
-	want []string,
-) {
-	t.Helper()
-	prop := findRequestProperty(t, spec, path, method, property)
-	rawEnum, ok := prop["enum"].([]any)
-	require.True(t, ok, "%s %s %s missing enum", method, path, property)
-	got := make([]string, 0, len(rawEnum))
-	for _, v := range rawEnum {
-		got = append(got, fmt.Sprint(v))
-	}
-	assert.Equal(t, want, got)
-}
-
-func findRequestProperty(
-	t *testing.T,
-	spec map[string]any,
-	path string,
-	method string,
-	property string,
-) map[string]any {
-	t.Helper()
-	schema := requestBodySchema(t, spec, path, method)
-	properties, ok := schema["properties"].(map[string]any)
-	require.True(t, ok, "%s %s missing request properties", method, path)
-	prop, ok := properties[property].(map[string]any)
-	require.True(t, ok, "%s %s missing property %s", method, path, property)
-	return resolveOpenAPISchema(t, spec, prop)
-}
-
-func requestBodySchema(
-	t *testing.T,
-	spec map[string]any,
-	path string,
-	method string,
-) map[string]any {
-	t.Helper()
-	op := openAPIOperation(t, spec, path, method)
-	body, ok := op["requestBody"].(map[string]any)
-	require.True(t, ok, "%s %s missing requestBody", method, path)
-	content, ok := body["content"].(map[string]any)
-	require.True(t, ok, "%s %s missing request content", method, path)
-	jsonContent, ok := content["application/json"].(map[string]any)
-	require.True(t, ok, "%s %s missing application/json body", method, path)
-	schema, ok := jsonContent["schema"].(map[string]any)
-	require.True(t, ok, "%s %s missing request schema", method, path)
-	return resolveOpenAPISchema(t, spec, schema)
-}
-
-func resolveOpenAPISchema(
-	t *testing.T,
-	spec map[string]any,
-	schema map[string]any,
-) map[string]any {
-	t.Helper()
-	ref, ok := schema["$ref"].(string)
-	if !ok {
-		return schema
-	}
-	const prefix = "#/components/schemas/"
-	require.True(t, strings.HasPrefix(ref, prefix), "unsupported schema ref %q", ref)
-	components, ok := spec["components"].(map[string]any)
-	require.True(t, ok, "spec missing components")
-	schemas, ok := components["schemas"].(map[string]any)
-	require.True(t, ok, "spec missing component schemas")
-	resolved, ok := schemas[strings.TrimPrefix(ref, prefix)].(map[string]any)
-	require.True(t, ok, "schema ref %q missing target", ref)
-	return resolved
-}
-
-func openAPIOperation(
-	t *testing.T,
-	spec map[string]any,
-	path string,
-	method string,
-) map[string]any {
-	t.Helper()
-	paths, ok := spec["paths"].(map[string]any)
-	require.True(t, ok, "spec missing paths")
-	pathItem, ok := paths[path].(map[string]any)
-	require.True(t, ok, "spec missing path %s", path)
-	op, ok := pathItem[method].(map[string]any)
-	require.True(t, ok, "spec missing operation %s %s", method, path)
-	return op
+	pathItem, ok := spec.Paths["/api/v1/config/terminal"]
+	require.True(t, ok, "spec missing path /api/v1/config/terminal")
+	op, ok := pathItem["post"]
+	require.True(t, ok, "spec missing operation post /api/v1/config/terminal")
+	require.NotNil(t, op.RequestBody,
+		"post /api/v1/config/terminal missing requestBody")
+	jsonContent, ok := op.RequestBody.Content["application/json"]
+	require.True(t, ok,
+		"post /api/v1/config/terminal missing application/json body")
+	schema := resolveSchema(jsonContent.Schema)
+	mode, ok := schema.Properties["mode"]
+	require.True(t, ok, "post /api/v1/config/terminal missing mode property")
+	mode = resolveSchema(mode)
+	assert.Equal(t, []string{"auto", "custom", "clipboard"}, mode.Enum)
 }
 
 func (te *testEnv) post(

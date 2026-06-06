@@ -493,7 +493,7 @@ export function getVersion(): Promise<VersionInfo> {
 
 export function checkForUpdate(): Promise<UpdateCheck> {
   return generated(() =>
-    SessionsService.getApiV1UpdateCheck()
+    MetadataService.getApiV1UpdateCheck()
   ) as Promise<UpdateCheck>;
 }
 
@@ -914,11 +914,11 @@ export async function listStarred(): Promise<{ session_ids: string[] }> {
 }
 
 export async function starSession(id: string): Promise<void> {
-  await generated(() => SessionsService.putApiV1SessionsIdStar({ id }));
+  await generated(() => StarredService.putApiV1SessionsIdStar({ id }));
 }
 
 export async function unstarSession(id: string): Promise<void> {
-  await generated(() => SessionsService.deleteApiV1SessionsIdStar({ id }));
+  await generated(() => StarredService.deleteApiV1SessionsIdStar({ id }));
 }
 
 export async function bulkStarSessions(

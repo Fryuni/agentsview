@@ -6,6 +6,7 @@ import type { AgentsResponse } from '../models/AgentsResponse';
 import type { DbStats } from '../models/DbStats';
 import type { MachinesResponse } from '../models/MachinesResponse';
 import type { ProjectsResponse } from '../models/ProjectsResponse';
+import type { UpdateCheckResponse } from '../models/UpdateCheckResponse';
 import type { VersionInfo } from '../models/VersionInfo';
 import type { CancelablePromise } from '../core/CancelablePromise';
 import { OpenAPI } from '../core/OpenAPI';
@@ -163,6 +164,29 @@ export class MetadataService {
         404: `Not Found`,
         409: `Conflict`,
         422: `Unprocessable Entity`,
+        500: `Internal Server Error`,
+        501: `Not Implemented`,
+        502: `Bad Gateway`,
+        503: `Service Unavailable`,
+        504: `Gateway Timeout`,
+      },
+    });
+  }
+  /**
+   * Check for updates
+   * @returns UpdateCheckResponse OK
+   * @throws ApiError
+   */
+  public static getApiV1UpdateCheck(): CancelablePromise<UpdateCheckResponse> {
+    return __request(OpenAPI, {
+      method: 'GET',
+      url: '/api/v1/update/check',
+      errors: {
+        400: `Bad Request`,
+        401: `Unauthorized`,
+        403: `Forbidden`,
+        404: `Not Found`,
+        409: `Conflict`,
         500: `Internal Server Error`,
         501: `Not Implemented`,
         502: `Bad Gateway`,

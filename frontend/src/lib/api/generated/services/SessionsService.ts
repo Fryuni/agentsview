@@ -21,7 +21,6 @@ import type { ServiceToolCallList } from '../models/ServiceToolCallList';
 import type { SessionDirectoryResponse } from '../models/SessionDirectoryResponse';
 import type { SessionUsageResponse } from '../models/SessionUsageResponse';
 import type { TrashResponse } from '../models/TrashResponse';
-import type { UpdateCheckResponse } from '../models/UpdateCheckResponse';
 import type { UploadSessionResponse } from '../models/UploadSessionResponse';
 import type { CancelablePromise } from '../core/CancelablePromise';
 import { OpenAPI } from '../core/OpenAPI';
@@ -963,74 +962,6 @@ export class SessionsService {
     });
   }
   /**
-   * Unstar session
-   * @returns void
-   * @throws ApiError
-   */
-  public static deleteApiV1SessionsIdStar({
-    id,
-  }: {
-    /**
-     * Session ID
-     */
-    id: string,
-  }): CancelablePromise<void> {
-    return __request(OpenAPI, {
-      method: 'DELETE',
-      url: '/api/v1/sessions/{id}/star',
-      path: {
-        'id': id,
-      },
-      errors: {
-        400: `Bad Request`,
-        401: `Unauthorized`,
-        403: `Forbidden`,
-        404: `Not Found`,
-        409: `Conflict`,
-        422: `Unprocessable Entity`,
-        500: `Internal Server Error`,
-        501: `Not Implemented`,
-        502: `Bad Gateway`,
-        503: `Service Unavailable`,
-        504: `Gateway Timeout`,
-      },
-    });
-  }
-  /**
-   * Star session
-   * @returns void
-   * @throws ApiError
-   */
-  public static putApiV1SessionsIdStar({
-    id,
-  }: {
-    /**
-     * Session ID
-     */
-    id: string,
-  }): CancelablePromise<void> {
-    return __request(OpenAPI, {
-      method: 'PUT',
-      url: '/api/v1/sessions/{id}/star',
-      path: {
-        'id': id,
-      },
-      errors: {
-        400: `Bad Request`,
-        401: `Unauthorized`,
-        403: `Forbidden`,
-        404: `Not Found`,
-        409: `Conflict`,
-        422: `Unprocessable Entity`,
-        500: `Internal Server Error`,
-        501: `Not Implemented`,
-        502: `Bad Gateway`,
-        503: `Service Unavailable`,
-        504: `Gateway Timeout`,
-      },
-    });
-  }
-  /**
    * Get session timing
    * @returns DbSessionTiming OK
    * @throws ApiError
@@ -1198,29 +1129,6 @@ export class SessionsService {
     return __request(OpenAPI, {
       method: 'GET',
       url: '/api/v1/trash',
-      errors: {
-        400: `Bad Request`,
-        401: `Unauthorized`,
-        403: `Forbidden`,
-        404: `Not Found`,
-        409: `Conflict`,
-        500: `Internal Server Error`,
-        501: `Not Implemented`,
-        502: `Bad Gateway`,
-        503: `Service Unavailable`,
-        504: `Gateway Timeout`,
-      },
-    });
-  }
-  /**
-   * Check for updates
-   * @returns UpdateCheckResponse OK
-   * @throws ApiError
-   */
-  public static getApiV1UpdateCheck(): CancelablePromise<UpdateCheckResponse> {
-    return __request(OpenAPI, {
-      method: 'GET',
-      url: '/api/v1/update/check',
       errors: {
         400: `Bad Request`,
         401: `Unauthorized`,
