@@ -16,35 +16,15 @@ import type {
   PublishResponse,
   GithubConfig,
   SetGithubConfigResponse,
-  AnalyticsSummary,
-  ActivityResponse,
-  HeatmapResponse,
-  ProjectsAnalyticsResponse,
-  HourOfWeekResponse,
-  SessionShapeResponse,
-  VelocityResponse,
-  ToolsAnalyticsResponse,
-  TopSessionsResponse,
-  SignalsAnalyticsResponse,
-  Granularity,
-  HeatmapMetric,
-  TopSessionsMetric,
-  TrendsGranularity,
-  TrendsTermsResponse,
   Insight,
   InsightsResponse,
   GenerateInsightRequest,
   PinsResponse,
   TrashResponse,
-  UsageSummaryResponse,
-  TopUsageSessionsResponse,
-  UsageParams,
-  UsageTopSessionsParams,
 } from "./types.js";
 import type { SessionActivityResponse } from "./types/session-activity.js";
 import type { SessionTiming } from "./types/timing.js";
 import {
-  AnalyticsService,
   ApiError as GeneratedApiError,
   ConfigService,
   InsightsService,
@@ -58,8 +38,6 @@ import {
   StarredService,
   SyncService,
   TerminalConfigBody as GeneratedTerminalConfigBody,
-  TrendsService,
-  UsageService,
 } from "./generated/index";
 
 const SERVER_URL_KEY = "agentsview-server-url";
@@ -180,7 +158,7 @@ function isCancelable<T>(value: Promise<T>): value is CancelableLike<T> {
   return typeof (value as { cancel?: unknown }).cancel === "function";
 }
 
-function configureGeneratedClient(): void {
+export function configureGeneratedClient(): void {
   OpenAPI.BASE = getGeneratedBase();
   OpenAPI.TOKEN = async () => getAuthToken();
 }
@@ -269,43 +247,6 @@ function metadataQuery(params: MetadataParams) {
   return omitEmpty({
     includeOneShot: params.include_one_shot,
     includeAutomated: params.include_automated,
-  });
-}
-
-function analyticsQuery(params: AnalyticsParams) {
-  return omitEmpty({
-    from: params.from,
-    to: params.to,
-    timezone: params.timezone,
-    machine: params.machine,
-    project: params.project,
-    agent: params.agent,
-    dow: params.dow,
-    hour: params.hour,
-    minUserMessages: params.min_user_messages,
-    activeSince: params.active_since,
-    includeOneShot: params.include_one_shot,
-    includeAutomated: params.include_automated,
-    termination: params.termination,
-  });
-}
-
-function usageQuery(params: UsageParams) {
-  return omitEmpty({
-    from: params.from,
-    to: params.to,
-    project: params.project,
-    machine: params.machine,
-    agent: params.agent,
-    model: params.model,
-    excludeProject: params.exclude_project,
-    excludeAgent: params.exclude_agent,
-    excludeModel: params.exclude_model,
-    minUserMessages: params.min_user_messages,
-    includeOneShot: params.include_one_shot,
-    includeAutomated: params.include_automated,
-    activeSince: params.active_since,
-    timezone: params.timezone,
   });
 }
 
@@ -1099,137 +1040,6 @@ export function applyWorktreeMappings(): Promise<ApplyWorktreeMappingsResponse> 
   );
 }
 
-/* Analytics */
-
-export interface AnalyticsParams {
-  from?: string;
-  to?: string;
-  timezone?: string;
-  machine?: string;
-  project?: string;
-  agent?: string;
-  dow?: number;
-  hour?: number;
-  min_user_messages?: number;
-  include_one_shot?: boolean;
-  include_automated?: boolean;
-  active_since?: string;
-  termination?: string;
-}
-
-export function getAnalyticsSummary(
-  params: AnalyticsParams,
-): Promise<AnalyticsSummary> {
-  return generated(() =>
-    AnalyticsService.getApiV1AnalyticsSummary(analyticsQuery(params))
-  ) as Promise<AnalyticsSummary>;
-}
-
-export function getAnalyticsActivity(
-  params: AnalyticsParams & {
-    granularity?: Granularity;
-  },
-): Promise<ActivityResponse> {
-  return generated(() =>
-    AnalyticsService.getApiV1AnalyticsActivity(omitEmpty({
-      ...analyticsQuery(params),
-      granularity: params.granularity,
-    }))
-  ) as Promise<ActivityResponse>;
-}
-
-export function getAnalyticsHeatmap(
-  params: AnalyticsParams & {
-    metric?: HeatmapMetric;
-  },
-): Promise<HeatmapResponse> {
-  return generated(() =>
-    AnalyticsService.getApiV1AnalyticsHeatmap(omitEmpty({
-      ...analyticsQuery(params),
-      metric: params.metric,
-    }))
-  ) as Promise<HeatmapResponse>;
-}
-
-export function getAnalyticsProjects(
-  params: AnalyticsParams,
-): Promise<ProjectsAnalyticsResponse> {
-  return generated(() =>
-    AnalyticsService.getApiV1AnalyticsProjects(analyticsQuery(params))
-  ) as Promise<ProjectsAnalyticsResponse>;
-}
-
-export function getAnalyticsHourOfWeek(
-  params: AnalyticsParams,
-): Promise<HourOfWeekResponse> {
-  return generated(() =>
-    AnalyticsService.getApiV1AnalyticsHourOfWeek(analyticsQuery(params))
-  ) as Promise<HourOfWeekResponse>;
-}
-
-export function getAnalyticsSessionShape(
-  params: AnalyticsParams,
-): Promise<SessionShapeResponse> {
-  return generated(() =>
-    AnalyticsService.getApiV1AnalyticsSessions(analyticsQuery(params))
-  ) as Promise<SessionShapeResponse>;
-}
-
-export function getAnalyticsVelocity(
-  params: AnalyticsParams,
-): Promise<VelocityResponse> {
-  return generated(() =>
-    AnalyticsService.getApiV1AnalyticsVelocity(analyticsQuery(params))
-  ) as Promise<VelocityResponse>;
-}
-
-export function getAnalyticsTools(
-  params: AnalyticsParams,
-): Promise<ToolsAnalyticsResponse> {
-  return generated(() =>
-    AnalyticsService.getApiV1AnalyticsTools(analyticsQuery(params))
-  ) as Promise<ToolsAnalyticsResponse>;
-}
-
-export function getAnalyticsTopSessions(
-  params: AnalyticsParams & {
-    metric?: TopSessionsMetric;
-  },
-): Promise<TopSessionsResponse> {
-  return generated(() =>
-    AnalyticsService.getApiV1AnalyticsTopSessions(omitEmpty({
-      ...analyticsQuery(params),
-      metric: params.metric,
-    }))
-  ) as Promise<TopSessionsResponse>;
-}
-
-export function getAnalyticsSignals(
-  params: AnalyticsParams,
-): Promise<SignalsAnalyticsResponse> {
-  return generated(() =>
-    AnalyticsService.getApiV1AnalyticsSignals(analyticsQuery(params))
-  ) as Promise<SignalsAnalyticsResponse>;
-}
-
-export interface TrendsTermsParams extends AnalyticsParams {
-  granularity?: TrendsGranularity;
-  terms: string[];
-}
-
-export function getTrendsTerms(
-  params: TrendsTermsParams,
-): Promise<TrendsTermsResponse> {
-  const term = params.terms.filter((t) => t.trim());
-  return generated(() =>
-    TrendsService.getApiV1TrendsTerms(omitEmpty({
-      ...analyticsQuery(params),
-      granularity: params.granularity,
-      term: term.length ? term : undefined,
-    }))
-  ) as Promise<TrendsTermsResponse>;
-}
-
 /* Insights */
 
 export interface ListInsightsParams {
@@ -1581,25 +1391,4 @@ export async function unpinMessage(
       messageId,
     })
   );
-}
-
-/* Usage */
-
-export function getUsageSummary(
-  params: UsageParams,
-): Promise<UsageSummaryResponse> {
-  return generated(() =>
-    UsageService.getApiV1UsageSummary(usageQuery(params))
-  ) as Promise<UsageSummaryResponse>;
-}
-
-export function getUsageTopSessions(
-  params: UsageTopSessionsParams,
-): Promise<TopUsageSessionsResponse> {
-  return generated(() =>
-    UsageService.getApiV1UsageTopSessions(omitEmpty({
-      ...usageQuery(params),
-      limit: params.limit,
-    }))
-  ) as Promise<TopUsageSessionsResponse>;
 }

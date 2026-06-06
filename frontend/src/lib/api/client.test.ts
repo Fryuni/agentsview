@@ -3,11 +3,6 @@ import {
   triggerSync,
   listSessions,
   search,
-  getAnalyticsSummary,
-  getAnalyticsActivity,
-  getAnalyticsHeatmap,
-  getAnalyticsTopSessions,
-  getTrendsTerms,
   watchEvents,
   WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS,
   watchSession,
@@ -666,85 +661,6 @@ describe("query serialization", () => {
     });
   });
 
-  describe("analytics query serialization", () => {
-    it("omits empty string params from summary", async () => {
-      await getAnalyticsSummary({
-        from: "2024-01-01",
-        project: "",
-        machine: "",
-      });
-      expect(lastUrl()).toBe(
-        "/api/v1/analytics/summary?from=2024-01-01",
-      );
-    });
-
-    it("includes all non-empty analytics params", async () => {
-      await getAnalyticsActivity({
-        from: "2024-01-01",
-        to: "2024-12-31",
-        granularity: "week",
-      });
-      expect(lastUrl()).toBe(
-        "/api/v1/analytics/activity" +
-          "?from=2024-01-01&to=2024-12-31&granularity=week",
-      );
-    });
-
-    it("uses generated default metric for heatmap", async () => {
-      await getAnalyticsHeatmap({
-        from: "2024-01-01",
-        metric: "" as "messages" | "sessions",
-      });
-      expect(lastUrl()).toBe(
-        "/api/v1/analytics/heatmap?from=2024-01-01&metric=messages",
-      );
-    });
-
-    it("uses generated default metric for top-sessions", async () => {
-      await getAnalyticsTopSessions({
-        from: "2024-01-01",
-        metric: "" as "messages" | "duration",
-      });
-      expect(lastUrl()).toBe(
-        "/api/v1/analytics/top-sessions?from=2024-01-01&metric=messages",
-      );
-    });
-  });
-
-  describe("trends query serialization", () => {
-    it("serializes trends repeated term params", async () => {
-      fetchSpy.mockResolvedValue(
-        mockJSONResponse({
-          granularity: "week",
-          from: "2024-06-01",
-          to: "2024-06-30",
-          message_count: 0,
-          buckets: [],
-          series: [],
-        }),
-      );
-
-      await getTrendsTerms({
-        from: "2024-06-01",
-        to: "2024-06-30",
-        timezone: "UTC",
-        granularity: "week",
-        terms: ["load bearing | load-bearing", "seam"],
-      });
-
-      const [path, query = ""] = lastUrl().split("?");
-      expect(path).toBe("/api/v1/trends/terms");
-      const params = new URLSearchParams(query);
-      expect(params.get("from")).toBe("2024-06-01");
-      expect(params.get("to")).toBe("2024-06-30");
-      expect(params.get("timezone")).toBe("UTC");
-      expect(params.get("granularity")).toBe("week");
-      expect(params.getAll("term")).toEqual([
-        "load bearing | load-bearing",
-        "seam",
-      ]);
-    });
-  });
 });
 
 describe("watchEvents", () => {
