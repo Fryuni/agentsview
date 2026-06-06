@@ -48,6 +48,31 @@ function mockFetchWithStream(
   }));
 }
 
+function mockJSONResponse(body: unknown = {}, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: "",
+    headers: new Headers({ "Content-Type": "application/json" }),
+    json: () => Promise.resolve(body),
+    text: () => Promise.resolve(JSON.stringify(body)),
+  };
+}
+
+function mockTextResponse(
+  text: string,
+  status: number,
+  ok = false,
+) {
+  return {
+    ok,
+    status,
+    statusText: "",
+    headers: new Headers({ "Content-Type": "text/plain" }),
+    text: () => Promise.resolve(text),
+  };
+}
+
 describe("triggerSync SSE parsing", () => {
   let activeHandles: SyncHandle[] = [];
 
@@ -173,22 +198,18 @@ describe("deleteInsight", () => {
   });
 
   it("sends DELETE request to correct endpoint", async () => {
-    fetchSpy.mockResolvedValue({ ok: true });
+    fetchSpy.mockResolvedValue(mockJSONResponse());
     const { deleteInsight } = await import("./client.js");
     await deleteInsight(42);
 
     expect(fetchSpy).toHaveBeenCalledWith(
       "/api/v1/insights/42",
-      { method: "DELETE" },
+      expect.objectContaining({ method: "DELETE" }),
     );
   });
 
   it("throws ApiError with status on non-ok response", async () => {
-    fetchSpy.mockResolvedValue({
-      ok: false,
-      status: 404,
-      text: () => Promise.resolve("not found"),
-    });
+    fetchSpy.mockResolvedValue(mockTextResponse("not found", 404));
     const { deleteInsight } = await import("./client.js");
 
     try {
@@ -201,11 +222,7 @@ describe("deleteInsight", () => {
   });
 
   it("throws ApiError with 500 status on server error", async () => {
-    fetchSpy.mockResolvedValue({
-      ok: false,
-      status: 500,
-      text: () => Promise.resolve("internal error"),
-    });
+    fetchSpy.mockResolvedValue(mockTextResponse("internal error", 500));
     const { deleteInsight } = await import("./client.js");
 
     try {
@@ -218,7 +235,7 @@ describe("deleteInsight", () => {
   });
 });
 
-describe("fetchJSON error handling", () => {
+describe("generated client error handling", () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -231,11 +248,7 @@ describe("fetchJSON error handling", () => {
   });
 
   it("throws ApiError with status on non-ok response", async () => {
-    fetchSpy.mockResolvedValue({
-      ok: false,
-      status: 502,
-      text: () => Promise.resolve("bad gateway"),
-    });
+    fetchSpy.mockResolvedValue(mockTextResponse("bad gateway", 502));
     const { listInsights } = await import("./client.js");
 
     try {
@@ -251,11 +264,7 @@ describe("fetchJSON error handling", () => {
   });
 
   it("falls back to 'API <status>' when body is empty", async () => {
-    fetchSpy.mockResolvedValue({
-      ok: false,
-      status: 500,
-      text: () => Promise.resolve(""),
-    });
+    fetchSpy.mockResolvedValue(mockTextResponse("", 500));
     const { listInsights } = await import("./client.js");
 
     try {
@@ -274,10 +283,7 @@ describe("insights query serialization", () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    fetchSpy = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({}),
-    });
+    fetchSpy = vi.fn().mockResolvedValue(mockJSONResponse());
     vi.stubGlobal("fetch", fetchSpy);
   });
 
@@ -547,10 +553,7 @@ describe("query serialization", () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    fetchSpy = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({}),
-    });
+    fetchSpy = vi.fn().mockResolvedValue(mockJSONResponse());
     vi.stubGlobal("fetch", fetchSpy);
   });
 
@@ -591,7 +594,7 @@ describe("query serialization", () => {
         name: "includes positive numbers",
         params: { limit: 25, min_messages: 5 },
         expected:
-          "/api/v1/sessions?limit=25&min_messages=5",
+          "/api/v1/sessions?min_messages=5&limit=25",
       },
       {
         name: "produces no query string when all empty",
@@ -632,13 +635,15 @@ describe("query serialization", () => {
     it("includes query and non-empty params", async () => {
       await search("hello", { project: "proj1", limit: 10 });
       expect(lastUrl()).toBe(
-        "/api/v1/search?q=hello&project=proj1&limit=10",
+        "/api/v1/search?q=hello&project=proj1&sort=relevance&limit=10",
       );
     });
 
     it("omits empty project filter", async () => {
       await search("hello", { project: "" });
-      expect(lastUrl()).toBe("/api/v1/search?q=hello");
+      expect(lastUrl()).toBe(
+        "/api/v1/search?q=hello&sort=relevance",
+      );
     });
 
     it("includes sort param when provided", async () => {
@@ -646,9 +651,11 @@ describe("query serialization", () => {
       expect(lastUrl()).toBe("/api/v1/search?q=hello&sort=recency");
     });
 
-    it("omits sort param when not provided", async () => {
+    it("serializes generated default sort when not provided", async () => {
       await search("hello");
-      expect(lastUrl()).toBe("/api/v1/search?q=hello");
+      expect(lastUrl()).toBe(
+        "/api/v1/search?q=hello&sort=relevance",
+      );
     });
 
     it("rejects empty query string", () => {
@@ -683,32 +690,31 @@ describe("query serialization", () => {
       );
     });
 
-    it("omits empty metric from heatmap", async () => {
+    it("uses generated default metric for heatmap", async () => {
       await getAnalyticsHeatmap({
         from: "2024-01-01",
         metric: "" as "messages" | "sessions",
       });
       expect(lastUrl()).toBe(
-        "/api/v1/analytics/heatmap?from=2024-01-01",
+        "/api/v1/analytics/heatmap?from=2024-01-01&metric=messages",
       );
     });
 
-    it("omits empty metric from top-sessions", async () => {
+    it("uses generated default metric for top-sessions", async () => {
       await getAnalyticsTopSessions({
         from: "2024-01-01",
         metric: "" as "messages" | "duration",
       });
       expect(lastUrl()).toBe(
-        "/api/v1/analytics/top-sessions?from=2024-01-01",
+        "/api/v1/analytics/top-sessions?from=2024-01-01&metric=messages",
       );
     });
   });
 
   describe("trends query serialization", () => {
     it("serializes trends repeated term params", async () => {
-      fetchSpy.mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({
+      fetchSpy.mockResolvedValue(
+        mockJSONResponse({
           granularity: "week",
           from: "2024-06-01",
           to: "2024-06-30",
@@ -716,7 +722,7 @@ describe("query serialization", () => {
           buckets: [],
           series: [],
         }),
-      });
+      );
 
       await getTrendsTerms({
         from: "2024-06-01",

@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/server"
 	"golang.org/x/term"
 )
 
@@ -69,6 +70,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newClassifierCommand())
 	root.AddCommand(newSecretsCommand())
 	root.AddCommand(newVersionCommand())
+	root.AddCommand(newOpenAPICommand())
 
 	defaultHelp := root.HelpFunc()
 	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
@@ -95,6 +97,28 @@ func newServeCommand() *cobra.Command {
 	}
 	config.RegisterServePFlags(cmd.Flags())
 	return cmd
+}
+
+func newOpenAPICommand() *cobra.Command {
+	return &cobra.Command{
+		Use:          "openapi",
+		Short:        "Print OpenAPI 3.1 schema",
+		GroupID:      groupMeta,
+		SilenceUsage: true,
+		Args:         cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			spec, err := server.OpenAPIJSON(server.VersionInfo{
+				Version:   version,
+				Commit:    commit,
+				BuildDate: buildDate,
+			})
+			if err != nil {
+				return err
+			}
+			_, err = cmd.OutOrStdout().Write(append(spec, '\n'))
+			return err
+		},
+	}
 }
 
 func newSyncCommand() *cobra.Command {

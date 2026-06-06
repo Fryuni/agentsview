@@ -18,7 +18,11 @@ describe("analytics token metric query serialization", () => {
   beforeEach(() => {
     fetchSpy = vi.fn().mockResolvedValue({
       ok: true,
+      status: 200,
+      statusText: "",
+      headers: new Headers({ "Content-Type": "application/json" }),
       json: () => Promise.resolve({}),
+      text: () => Promise.resolve("{}"),
     });
     vi.stubGlobal("fetch", fetchSpy);
     localStorageGetItem = vi.fn().mockReturnValue(null);

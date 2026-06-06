@@ -43,6 +43,24 @@ import type {
 } from "./types.js";
 import type { SessionActivityResponse } from "./types/session-activity.js";
 import type { SessionTiming } from "./types/timing.js";
+import {
+  AnalyticsService,
+  ApiError as GeneratedApiError,
+  ConfigService,
+  InsightsService,
+  MetadataService,
+  OpenAPI,
+  OpenersService,
+  PinsService,
+  SearchService,
+  SessionsService,
+  SettingsService,
+  StarredService,
+  SyncService,
+  TerminalConfigBody as GeneratedTerminalConfigBody,
+  TrendsService,
+  UsageService,
+} from "./generated/index";
 
 const SERVER_URL_KEY = "agentsview-server-url";
 const AUTH_TOKEN_KEY = "agentsview-auth-token";
@@ -61,6 +79,16 @@ export function getBase(): string {
     return `${base}/api/v1`;
   }
   return "/api/v1";
+}
+
+function getGeneratedBase(): string {
+  const server = getServerUrl();
+  if (server) return server;
+  const baseEl = document.querySelector("base[href]");
+  if (baseEl) {
+    return new URL(document.baseURI).pathname.replace(/\/$/, "");
+  }
+  return "";
 }
 
 export function getServerUrl(): string {
@@ -144,25 +172,141 @@ async function responseErrorMessage(res: Response): Promise<string> {
   return apiErrorMessage(res.status, body);
 }
 
-async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${getBase()}${path}`, authHeaders(init));
-  if (!res.ok) {
-    throw new ApiError(res.status, await responseErrorMessage(res));
-  }
-  return res.json() as Promise<T>;
+interface CancelableLike<T> extends Promise<T> {
+  cancel: () => void;
 }
 
-type QueryValue = string | number | boolean | undefined | null;
+function isCancelable<T>(value: Promise<T>): value is CancelableLike<T> {
+  return typeof (value as { cancel?: unknown }).cancel === "function";
+}
 
-function buildQuery(params: Record<string, QueryValue>): string {
-  const q = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== null && value !== "") {
-      q.set(key, String(value));
+function configureGeneratedClient(): void {
+  OpenAPI.BASE = getGeneratedBase();
+  OpenAPI.TOKEN = async () => getAuthToken();
+}
+
+function generatedErrorMessage(err: GeneratedApiError): string {
+  if (typeof err.body === "string") {
+    return apiErrorMessage(err.status, err.body);
+  }
+  if (
+    err.body !== null &&
+    typeof err.body === "object" &&
+    "error" in err.body &&
+    typeof err.body.error === "string" &&
+    err.body.error
+  ) {
+    return err.body.error;
+  }
+  return err.message || `API ${err.status}`;
+}
+
+async function generated<T>(
+  call: () => Promise<T>,
+  init?: RequestInit,
+): Promise<T> {
+  configureGeneratedClient();
+  const promise = call();
+  if (init?.signal && isCancelable(promise)) {
+    if (init.signal.aborted) {
+      promise.cancel();
+    } else {
+      init.signal.addEventListener("abort", () => promise.cancel(), {
+        once: true,
+      });
     }
   }
-  const qs = q.toString();
-  return qs ? `?${qs}` : "";
+  try {
+    return await promise;
+  } catch (err) {
+    if (err instanceof GeneratedApiError) {
+      throw new ApiError(err.status, generatedErrorMessage(err));
+    }
+    throw err;
+  }
+}
+
+function omitEmpty<T extends object>(input: T): Partial<T> {
+  const out: Partial<T> = {};
+  for (const [key, value] of Object.entries(input) as [
+    keyof T,
+    T[keyof T],
+  ][]) {
+    if (value !== undefined && value !== null && value !== "") {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function listSessionQuery(params: ListSessionsParams) {
+  return omitEmpty({
+    project: params.project,
+    excludeProject: params.exclude_project,
+    machine: params.machine,
+    agent: params.agent,
+    termination: params.termination,
+    date: params.date,
+    dateFrom: params.date_from,
+    dateTo: params.date_to,
+    activeSince: params.active_since,
+    minMessages: params.min_messages,
+    maxMessages: params.max_messages,
+    minUserMessages: params.min_user_messages,
+    includeOneShot: params.include_one_shot,
+    includeAutomated: params.include_automated,
+    includeChildren: params.include_children,
+    outcome: params.outcome,
+    healthGrade: params.health_grade,
+    minToolFailures: params.min_tool_failures,
+    hasSecret: params.has_secret,
+    cursor: params.cursor,
+    limit: params.limit,
+  });
+}
+
+function metadataQuery(params: MetadataParams) {
+  return omitEmpty({
+    includeOneShot: params.include_one_shot,
+    includeAutomated: params.include_automated,
+  });
+}
+
+function analyticsQuery(params: AnalyticsParams) {
+  return omitEmpty({
+    from: params.from,
+    to: params.to,
+    timezone: params.timezone,
+    machine: params.machine,
+    project: params.project,
+    agent: params.agent,
+    dow: params.dow,
+    hour: params.hour,
+    minUserMessages: params.min_user_messages,
+    activeSince: params.active_since,
+    includeOneShot: params.include_one_shot,
+    includeAutomated: params.include_automated,
+    termination: params.termination,
+  });
+}
+
+function usageQuery(params: UsageParams) {
+  return omitEmpty({
+    from: params.from,
+    to: params.to,
+    project: params.project,
+    machine: params.machine,
+    agent: params.agent,
+    model: params.model,
+    excludeProject: params.exclude_project,
+    excludeAgent: params.exclude_agent,
+    excludeModel: params.exclude_model,
+    minUserMessages: params.min_user_messages,
+    includeOneShot: params.include_one_shot,
+    includeAutomated: params.include_automated,
+    activeSince: params.active_since,
+    timezone: params.timezone,
+  });
 }
 
 /* Sessions */
@@ -183,6 +327,11 @@ export interface ListSessionsParams {
   include_one_shot?: boolean;
   include_automated?: boolean;
   include_children?: boolean;
+  outcome?: string;
+  health_grade?: string;
+  min_tool_failures?: number;
+  has_secret?: boolean;
+  starred?: boolean;
   cursor?: string;
   limit?: number;
 }
@@ -195,32 +344,42 @@ export type SidebarSessionIndexParams = Omit<
 export function listSessions(
   params: ListSessionsParams = {},
 ): Promise<SessionPage> {
-  return fetchJSON(`/sessions${buildQuery({ ...params })}`);
+  return generated(() =>
+    SessionsService.getApiV1Sessions(listSessionQuery(params))
+  ) as Promise<SessionPage>;
 }
 
 export function getSidebarSessionIndex(
   params: SidebarSessionIndexParams = {},
 ): Promise<SidebarSessionIndexResponse> {
-  return fetchJSON(`/sessions/sidebar-index${buildQuery({ ...params })}`);
+  return generated(() =>
+    SessionsService.getApiV1SessionsSidebarIndex(listSessionQuery(params))
+  ) as Promise<SidebarSessionIndexResponse>;
 }
 
 export function getSession(id: string, init?: RequestInit): Promise<Session> {
-  return fetchJSON(`/sessions/${id}`, init);
+  return generated(
+    () => SessionsService.getApiV1SessionsId({ id }),
+    init,
+  ) as Promise<Session>;
 }
 
 export function getChildSessions(
   id: string,
   init?: RequestInit,
 ): Promise<Session[]> {
-  return fetchJSON(`/sessions/${id}/children`, init);
+  return generated(
+    () => SessionsService.getApiV1SessionsIdChildren({ id }),
+    init,
+  ) as Promise<Session[]>;
 }
 
 export function getSessionActivity(
   sessionId: string,
 ): Promise<SessionActivityResponse> {
-  return fetchJSON(
-    `/sessions/${sessionId}/activity`,
-  );
+  return generated(() =>
+    SessionsService.getApiV1SessionsIdActivity({ id: sessionId })
+  ) as Promise<SessionActivityResponse>;
 }
 
 /* Messages */
@@ -236,10 +395,13 @@ export function getMessages(
   params: GetMessagesParams = {},
   init?: RequestInit,
 ): Promise<MessagesResponse> {
-  return fetchJSON(
-    `/sessions/${sessionId}/messages${buildQuery({ ...params })}`,
+  return generated(
+    () => SessionsService.getApiV1SessionsIdMessages({
+      id: sessionId,
+      ...omitEmpty(params),
+    }),
     init,
-  );
+  ) as Promise<MessagesResponse>;
 }
 
 /* Search */
@@ -257,7 +419,13 @@ export function search(
   if (!query) {
     throw new Error("search query must not be empty");
   }
-  return fetchJSON(`/search${buildQuery({ q: query, ...params })}`, init);
+  return generated(
+    () => SearchService.getApiV1Search({
+      q: query,
+      ...omitEmpty(params),
+    }),
+    init,
+  ) as Promise<SearchResponse>;
 }
 
 export interface SessionSearchResponse {
@@ -269,10 +437,13 @@ export function searchSession(
   query: string,
   init?: RequestInit,
 ): Promise<SessionSearchResponse> {
-  return fetchJSON(
-    `/sessions/${sessionId}/search${buildQuery({ q: query })}`,
+  return generated(
+    () => SessionsService.getApiV1SessionsIdSearch({
+      id: sessionId,
+      q: query,
+    }),
     init,
-  );
+  ) as Promise<SessionSearchResponse>;
 }
 
 /* Metadata */
@@ -285,39 +456,53 @@ interface MetadataParams {
 export function getProjects(
   params: MetadataParams = {},
 ): Promise<ProjectsResponse> {
-  return fetchJSON(`/projects${buildQuery({ ...params })}`);
+  return generated(() =>
+    MetadataService.getApiV1Projects(metadataQuery(params))
+  ) as Promise<ProjectsResponse>;
 }
 
 export function getMachines(
   params: MetadataParams = {},
 ): Promise<MachinesResponse> {
-  return fetchJSON(`/machines${buildQuery({ ...params })}`);
+  return generated(() =>
+    MetadataService.getApiV1Machines(metadataQuery(params))
+  ) as Promise<MachinesResponse>;
 }
 
 export function getAgents(
   params: MetadataParams = {},
 ): Promise<AgentsResponse> {
-  return fetchJSON(`/agents${buildQuery({ ...params })}`);
+  return generated(() =>
+    MetadataService.getApiV1Agents(metadataQuery(params))
+  ) as Promise<AgentsResponse>;
 }
 
 export function getStats(
   params: MetadataParams = {},
 ): Promise<Stats> {
-  return fetchJSON(`/stats${buildQuery({ ...params })}`);
+  return generated(() =>
+    MetadataService.getApiV1Stats(metadataQuery(params))
+  ) as Promise<Stats>;
 }
 
 export function getVersion(): Promise<VersionInfo> {
-  return fetchJSON("/version");
+  return generated(() =>
+    MetadataService.getApiV1Version()
+  ) as Promise<VersionInfo>;
 }
 
 export function checkForUpdate(): Promise<UpdateCheck> {
-  return fetchJSON("/update/check");
+  return generated(() =>
+    SessionsService.getApiV1UpdateCheck()
+  ) as Promise<UpdateCheck>;
 }
 
 /* Sync */
 
 export function getSyncStatus(): Promise<SyncStatus> {
-  return fetchJSON("/sync/status");
+  return generated(() =>
+    SyncService.getApiV1SyncStatus()
+  ) as Promise<SyncStatus>;
 }
 
 export interface SyncHandle {
@@ -688,70 +873,62 @@ export function resumeSession(
   sessionId: string,
   flags: ResumeRequest = {},
 ): Promise<ResumeResponse> {
-  return fetchJSON(`/sessions/${sessionId}/resume`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(flags),
-  });
+  return generated(() =>
+    SessionsService.postApiV1SessionsIdResume({
+      id: sessionId,
+      requestBody: flags,
+    })
+  ) as Promise<ResumeResponse>;
 }
 
 /* Publish / GitHub config */
 
 export function publishSession(sessionId: string): Promise<PublishResponse> {
-  return fetchJSON(`/sessions/${sessionId}/publish`, {
-    method: "POST",
-  });
+  return generated(() =>
+    SessionsService.postApiV1SessionsIdPublish({ id: sessionId })
+  ) as Promise<PublishResponse>;
 }
 
 export function getGithubConfig(): Promise<GithubConfig> {
-  return fetchJSON("/config/github");
+  return generated(() =>
+    ConfigService.getApiV1ConfigGithub()
+  ) as Promise<GithubConfig>;
 }
 
 export function setGithubConfig(
   token: string,
 ): Promise<SetGithubConfigResponse> {
-  return fetchJSON("/config/github", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token }),
-  });
+  return generated(() =>
+    ConfigService.postApiV1ConfigGithub({
+      requestBody: { token },
+    })
+  ) as Promise<SetGithubConfigResponse>;
 }
 
 /* Starred */
 
 export async function listStarred(): Promise<{ session_ids: string[] }> {
-  return fetchJSON("/starred");
+  return generated(() => StarredService.getApiV1Starred()) as Promise<{
+    session_ids: string[];
+  }>;
 }
 
 export async function starSession(id: string): Promise<void> {
-  const res = await fetch(`${getBase()}/sessions/${id}/star`, authHeaders({
-    method: "PUT",
-  }));
-  if (!res.ok) {
-    throw new ApiError(res.status, await responseErrorMessage(res));
-  }
+  await generated(() => SessionsService.putApiV1SessionsIdStar({ id }));
 }
 
 export async function unstarSession(id: string): Promise<void> {
-  const res = await fetch(`${getBase()}/sessions/${id}/star`, authHeaders({
-    method: "DELETE",
-  }));
-  if (!res.ok) {
-    throw new ApiError(res.status, await responseErrorMessage(res));
-  }
+  await generated(() => SessionsService.deleteApiV1SessionsIdStar({ id }));
 }
 
 export async function bulkStarSessions(
   sessionIds: string[],
 ): Promise<void> {
-  const res = await fetch(`${getBase()}/starred/bulk`, authHeaders({
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_ids: sessionIds }),
-  }));
-  if (!res.ok) {
-    throw new ApiError(res.status, await responseErrorMessage(res));
-  }
+  await generated(() =>
+    StarredService.postApiV1StarredBulk({
+      requestBody: { session_ids: sessionIds },
+    })
+  );
 }
 
 /* Session directory */
@@ -759,7 +936,9 @@ export async function bulkStarSessions(
 export function getSessionDirectory(
   sessionId: string,
 ): Promise<{ path: string }> {
-  return fetchJSON(`/sessions/${sessionId}/directory`);
+  return generated(() =>
+    SessionsService.getApiV1SessionsIdDirectory({ id: sessionId })
+  );
 }
 
 /* Openers — Conductor-style "Open in" */
@@ -776,7 +955,9 @@ export interface OpenersResponse {
 }
 
 export function listOpeners(): Promise<OpenersResponse> {
-  return fetchJSON("/openers");
+  return generated(() =>
+    OpenersService.getApiV1Openers()
+  ) as Promise<OpenersResponse>;
 }
 
 export interface OpenResponse {
@@ -789,11 +970,12 @@ export function openSession(
   sessionId: string,
   openerId: string,
 ): Promise<OpenResponse> {
-  return fetchJSON(`/sessions/${sessionId}/open`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ opener_id: openerId }),
-  });
+  return generated(() =>
+    SessionsService.postApiV1SessionsIdOpen({
+      id: sessionId,
+      requestBody: { opener_id: openerId },
+    })
+  ) as Promise<OpenResponse>;
 }
 
 /* Terminal config */
@@ -805,17 +987,19 @@ export interface TerminalConfig {
 }
 
 export function getTerminalConfig(): Promise<TerminalConfig> {
-  return fetchJSON("/config/terminal");
+  return generated(() =>
+    ConfigService.getApiV1ConfigTerminal()
+  ) as Promise<TerminalConfig>;
 }
 
 export function setTerminalConfig(
   cfg: TerminalConfig,
 ): Promise<TerminalConfig> {
-  return fetchJSON("/config/terminal", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(cfg),
-  });
+  return generated(() =>
+    ConfigService.postApiV1ConfigTerminal({
+      requestBody: cfg as GeneratedTerminalConfigBody,
+    })
+  ) as Promise<TerminalConfig>;
 }
 
 /* Settings */
@@ -831,17 +1015,19 @@ export interface AppSettings {
 }
 
 export function getSettings(): Promise<AppSettings> {
-  return fetchJSON("/settings");
+  return generated(() =>
+    SettingsService.getApiV1Settings()
+  ) as Promise<AppSettings>;
 }
 
 export function updateSettings(
   patch: Partial<AppSettings>,
 ): Promise<AppSettings> {
-  return fetchJSON("/settings", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  });
+  return generated(() =>
+    SettingsService.putApiV1Settings({
+      requestBody: patch,
+    })
+  ) as Promise<AppSettings>;
 }
 
 export interface WorktreeProjectMapping {
@@ -872,44 +1058,45 @@ export interface ApplyWorktreeMappingsResponse {
 }
 
 export function getWorktreeMappings(): Promise<WorktreeMappingsResponse> {
-  return fetchJSON("/settings/worktree-mappings");
+  return generated(() =>
+    SettingsService.getApiV1SettingsWorktreeMappings()
+  ) as Promise<WorktreeMappingsResponse>;
 }
 
 export function createWorktreeMapping(
   input: WorktreeMappingInput,
 ): Promise<WorktreeProjectMapping> {
-  return fetchJSON("/settings/worktree-mappings", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
+  return generated(() =>
+    SettingsService.postApiV1SettingsWorktreeMappings({
+      requestBody: input,
+    })
+  ) as Promise<WorktreeProjectMapping>;
 }
 
 export function updateWorktreeMapping(
   id: number,
   input: WorktreeMappingInput,
 ): Promise<WorktreeProjectMapping> {
-  return fetchJSON(`/settings/worktree-mappings/${id}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
+  return generated(() =>
+    SettingsService.putApiV1SettingsWorktreeMappingsId({
+      id: String(id),
+      requestBody: input,
+    })
+  ) as Promise<WorktreeProjectMapping>;
 }
 
 export async function deleteWorktreeMapping(id: number): Promise<void> {
-  const res = await fetch(
-    `${getBase()}/settings/worktree-mappings/${id}`,
-    authHeaders({ method: "DELETE" }),
+  await generated(() =>
+    SettingsService.deleteApiV1SettingsWorktreeMappingsId({
+      id: String(id),
+    })
   );
-  if (!res.ok) {
-    throw new ApiError(res.status, await responseErrorMessage(res));
-  }
 }
 
 export function applyWorktreeMappings(): Promise<ApplyWorktreeMappingsResponse> {
-  return fetchJSON("/settings/worktree-mappings/apply", {
-    method: "POST",
-  });
+  return generated(() =>
+    SettingsService.postApiV1SettingsWorktreeMappingsApply()
+  );
 }
 
 /* Analytics */
@@ -933,7 +1120,9 @@ export interface AnalyticsParams {
 export function getAnalyticsSummary(
   params: AnalyticsParams,
 ): Promise<AnalyticsSummary> {
-  return fetchJSON(`/analytics/summary${buildQuery({ ...params })}`);
+  return generated(() =>
+    AnalyticsService.getApiV1AnalyticsSummary(analyticsQuery(params))
+  ) as Promise<AnalyticsSummary>;
 }
 
 export function getAnalyticsActivity(
@@ -941,7 +1130,12 @@ export function getAnalyticsActivity(
     granularity?: Granularity;
   },
 ): Promise<ActivityResponse> {
-  return fetchJSON(`/analytics/activity${buildQuery({ ...params })}`);
+  return generated(() =>
+    AnalyticsService.getApiV1AnalyticsActivity(omitEmpty({
+      ...analyticsQuery(params),
+      granularity: params.granularity,
+    }))
+  ) as Promise<ActivityResponse>;
 }
 
 export function getAnalyticsHeatmap(
@@ -949,37 +1143,52 @@ export function getAnalyticsHeatmap(
     metric?: HeatmapMetric;
   },
 ): Promise<HeatmapResponse> {
-  return fetchJSON(`/analytics/heatmap${buildQuery({ ...params })}`);
+  return generated(() =>
+    AnalyticsService.getApiV1AnalyticsHeatmap(omitEmpty({
+      ...analyticsQuery(params),
+      metric: params.metric,
+    }))
+  ) as Promise<HeatmapResponse>;
 }
 
 export function getAnalyticsProjects(
   params: AnalyticsParams,
 ): Promise<ProjectsAnalyticsResponse> {
-  return fetchJSON(`/analytics/projects${buildQuery({ ...params })}`);
+  return generated(() =>
+    AnalyticsService.getApiV1AnalyticsProjects(analyticsQuery(params))
+  ) as Promise<ProjectsAnalyticsResponse>;
 }
 
 export function getAnalyticsHourOfWeek(
   params: AnalyticsParams,
 ): Promise<HourOfWeekResponse> {
-  return fetchJSON(`/analytics/hour-of-week${buildQuery({ ...params })}`);
+  return generated(() =>
+    AnalyticsService.getApiV1AnalyticsHourOfWeek(analyticsQuery(params))
+  ) as Promise<HourOfWeekResponse>;
 }
 
 export function getAnalyticsSessionShape(
   params: AnalyticsParams,
 ): Promise<SessionShapeResponse> {
-  return fetchJSON(`/analytics/sessions${buildQuery({ ...params })}`);
+  return generated(() =>
+    AnalyticsService.getApiV1AnalyticsSessions(analyticsQuery(params))
+  ) as Promise<SessionShapeResponse>;
 }
 
 export function getAnalyticsVelocity(
   params: AnalyticsParams,
 ): Promise<VelocityResponse> {
-  return fetchJSON(`/analytics/velocity${buildQuery({ ...params })}`);
+  return generated(() =>
+    AnalyticsService.getApiV1AnalyticsVelocity(analyticsQuery(params))
+  ) as Promise<VelocityResponse>;
 }
 
 export function getAnalyticsTools(
   params: AnalyticsParams,
 ): Promise<ToolsAnalyticsResponse> {
-  return fetchJSON(`/analytics/tools${buildQuery({ ...params })}`);
+  return generated(() =>
+    AnalyticsService.getApiV1AnalyticsTools(analyticsQuery(params))
+  ) as Promise<ToolsAnalyticsResponse>;
 }
 
 export function getAnalyticsTopSessions(
@@ -987,15 +1196,20 @@ export function getAnalyticsTopSessions(
     metric?: TopSessionsMetric;
   },
 ): Promise<TopSessionsResponse> {
-  return fetchJSON(`/analytics/top-sessions${buildQuery({ ...params })}`);
+  return generated(() =>
+    AnalyticsService.getApiV1AnalyticsTopSessions(omitEmpty({
+      ...analyticsQuery(params),
+      metric: params.metric,
+    }))
+  ) as Promise<TopSessionsResponse>;
 }
 
 export function getAnalyticsSignals(
   params: AnalyticsParams,
 ): Promise<SignalsAnalyticsResponse> {
-  return fetchJSON(
-    `/analytics/signals${buildQuery({ ...params })}`,
-  );
+  return generated(() =>
+    AnalyticsService.getApiV1AnalyticsSignals(analyticsQuery(params))
+  ) as Promise<SignalsAnalyticsResponse>;
 }
 
 export interface TrendsTermsParams extends AnalyticsParams {
@@ -1003,57 +1217,49 @@ export interface TrendsTermsParams extends AnalyticsParams {
   terms: string[];
 }
 
-function buildTrendsTermsQuery(params: TrendsTermsParams): string {
-  const q = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (
-      key === "terms" ||
-      value === undefined ||
-      value === null ||
-      value === ""
-    ) {
-      continue;
-    }
-    // Match buildQuery semantics: 0 and false are valid query values.
-    q.set(key, String(value));
-  }
-  for (const term of params.terms) {
-    if (term.trim()) q.append("term", term);
-  }
-  const qs = q.toString();
-  return qs ? `?${qs}` : "";
-}
-
 export function getTrendsTerms(
   params: TrendsTermsParams,
 ): Promise<TrendsTermsResponse> {
-  return fetchJSON(`/trends/terms${buildTrendsTermsQuery(params)}`);
+  const term = params.terms.filter((t) => t.trim());
+  return generated(() =>
+    TrendsService.getApiV1TrendsTerms(omitEmpty({
+      ...analyticsQuery(params),
+      granularity: params.granularity,
+      term: term.length ? term : undefined,
+    }))
+  ) as Promise<TrendsTermsResponse>;
 }
 
 /* Insights */
 
 export interface ListInsightsParams {
-  type?: string;
+  type?: "daily_activity" | "agent_analysis" | "";
   project?: string;
 }
 
 export function listInsights(
   params: ListInsightsParams = {},
 ): Promise<InsightsResponse> {
-  return fetchJSON(`/insights${buildQuery({ ...params })}`);
+  const query = omitEmpty({
+    type: params.type || undefined,
+    project: params.project,
+  }) as {
+    type?: "daily_activity" | "agent_analysis";
+    project?: string;
+  };
+  return generated(() =>
+    InsightsService.getApiV1Insights(query)
+  ) as Promise<InsightsResponse>;
 }
 
 export function getInsight(id: number): Promise<Insight> {
-  return fetchJSON(`/insights/${id}`);
+  return generated(() =>
+    InsightsService.getApiV1InsightsId({ id })
+  ) as Promise<Insight>;
 }
 
 export async function deleteInsight(id: number): Promise<void> {
-  const res = await fetch(`${getBase()}/insights/${id}`, authHeaders({
-    method: "DELETE",
-  }));
-  if (!res.ok) {
-    throw new ApiError(res.status, await responseErrorMessage(res));
-  }
+  await generated(() => InsightsService.deleteApiV1InsightsId({ id }));
 }
 
 export interface GenerateInsightHandle {
@@ -1183,48 +1389,38 @@ export function renameSession(
   id: string,
   displayName: string | null,
 ): Promise<Session> {
-  return fetchJSON(`/sessions/${id}/rename`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ display_name: displayName }),
-  });
+  return generated(() =>
+    SessionsService.patchApiV1SessionsIdRename({
+      id,
+      requestBody: { display_name: displayName },
+    })
+  ) as Promise<Session>;
 }
 
 export async function deleteSession(id: string): Promise<void> {
-  const res = await fetch(`${getBase()}/sessions/${id}`, authHeaders({
-    method: "DELETE",
-  }));
-  if (!res.ok) {
-    throw new ApiError(res.status, await responseErrorMessage(res));
-  }
+  await generated(() => SessionsService.deleteApiV1SessionsId({ id }));
 }
 
 export async function restoreSession(id: string): Promise<void> {
-  const res = await fetch(`${getBase()}/sessions/${id}/restore`, authHeaders({
-    method: "POST",
-  }));
-  if (!res.ok) {
-    throw new ApiError(res.status, await responseErrorMessage(res));
-  }
+  await generated(() => SessionsService.postApiV1SessionsIdRestore({ id }));
 }
 
 export async function permanentDeleteSession(
   id: string,
 ): Promise<void> {
-  const res = await fetch(`${getBase()}/sessions/${id}/permanent`, authHeaders({
-    method: "DELETE",
-  }));
-  if (!res.ok) {
-    throw new ApiError(res.status, await responseErrorMessage(res));
-  }
+  await generated(() =>
+    SessionsService.deleteApiV1SessionsIdPermanent({ id })
+  );
 }
 
 export function listTrash(): Promise<TrashResponse> {
-  return fetchJSON("/trash");
+  return generated(() =>
+    SessionsService.getApiV1Trash()
+  ) as Promise<TrashResponse>;
 }
 
 export async function emptyTrash(): Promise<{ deleted: number }> {
-  return fetchJSON("/trash", { method: "DELETE" });
+  return generated(() => SessionsService.deleteApiV1Trash());
 }
 
 /* Import */
@@ -1348,14 +1544,17 @@ export async function importChatGPT(
 /* Pins */
 
 export function listPins(project?: string): Promise<PinsResponse> {
-  const url = project ? `/pins?project=${encodeURIComponent(project)}` : "/pins";
-  return fetchJSON(url);
+  return generated(() =>
+    PinsService.getApiV1Pins(omitEmpty({ project }))
+  ) as Promise<PinsResponse>;
 }
 
 export function listSessionPins(
   sessionId: string,
 ): Promise<PinsResponse> {
-  return fetchJSON(`/sessions/${sessionId}/pins`);
+  return generated(() =>
+    PinsService.getApiV1SessionsIdPins({ id: sessionId })
+  ) as Promise<PinsResponse>;
 }
 
 export function pinMessage(
@@ -1363,13 +1562,12 @@ export function pinMessage(
   messageId: number,
   note?: string,
 ): Promise<{ id: number }> {
-  return fetchJSON(
-    `/sessions/${sessionId}/messages/${messageId}/pin`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ note: note ?? null }),
-    },
+  return generated(() =>
+    PinsService.postApiV1SessionsIdMessagesMessageidPin({
+      id: sessionId,
+      messageId,
+      requestBody: { note },
+    })
   );
 }
 
@@ -1377,13 +1575,12 @@ export async function unpinMessage(
   sessionId: string,
   messageId: number,
 ): Promise<void> {
-  const res = await fetch(
-    `${getBase()}/sessions/${sessionId}/messages/${messageId}/pin`,
-    authHeaders({ method: "DELETE" }),
+  await generated(() =>
+    PinsService.deleteApiV1SessionsIdMessagesMessageidPin({
+      id: sessionId,
+      messageId,
+    })
   );
-  if (!res.ok) {
-    throw new ApiError(res.status, await responseErrorMessage(res));
-  }
 }
 
 /* Usage */
@@ -1391,11 +1588,18 @@ export async function unpinMessage(
 export function getUsageSummary(
   params: UsageParams,
 ): Promise<UsageSummaryResponse> {
-  return fetchJSON(`/usage/summary${buildQuery({ ...params })}`);
+  return generated(() =>
+    UsageService.getApiV1UsageSummary(usageQuery(params))
+  ) as Promise<UsageSummaryResponse>;
 }
 
 export function getUsageTopSessions(
   params: UsageTopSessionsParams,
 ): Promise<TopUsageSessionsResponse> {
-  return fetchJSON(`/usage/top-sessions${buildQuery({ ...params })}`);
+  return generated(() =>
+    UsageService.getApiV1UsageTopSessions(omitEmpty({
+      ...usageQuery(params),
+      limit: params.limit,
+    }))
+  ) as Promise<TopUsageSessionsResponse>;
 }
