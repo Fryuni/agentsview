@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/timeutil"
@@ -326,28 +327,35 @@ func (s *Server) humaTimeout() func(*huma.Operation) {
 			if errors.Is(ctx.Context().Err(), context.Canceled) {
 				return
 			}
-			if s.handlerDelay > 0 {
-				timer := time.NewTimer(s.cfg.WriteTimeout)
-				defer timer.Stop()
-				select {
-				case <-time.After(s.handlerDelay):
-				case <-timer.C:
-					ctx.SetHeader("Content-Type", "application/json")
-					ctx.SetStatus(http.StatusServiceUnavailable)
-					_, _ = io.WriteString(ctx.BodyWriter(), `{"error":"request timed out"}`)
-					return
-				case <-ctx.Context().Done():
-					next(ctx)
-					return
-				}
-			}
-			if s.cfg.WriteTimeout <= 0 {
+			if errors.Is(ctx.Context().Err(), context.DeadlineExceeded) {
 				next(ctx)
 				return
 			}
-			reqCtx, cancel := context.WithTimeout(ctx.Context(), s.cfg.WriteTimeout)
-			defer cancel()
-			next(huma.WithContext(ctx, reqCtx))
+			if s.cfg.WriteTimeout <= 0 {
+				if s.handlerDelay > 0 {
+					time.Sleep(s.handlerDelay)
+				}
+				next(ctx)
+				return
+			}
+
+			req, writer := humago.Unwrap(ctx)
+			timeoutHandler := http.TimeoutHandler(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if s.handlerDelay > 0 {
+						time.Sleep(s.handlerDelay)
+					}
+					next(huma.WithContext(humago.NewContext(ctx.Operation(), r, w), r.Context()))
+				}),
+				s.cfg.WriteTimeout,
+				`{"error":"request timed out"}`,
+			)
+			tw := &contentTypeWrapper{
+				ResponseWriter: writer,
+				contentType:    "application/json",
+				triggerStatus:  http.StatusServiceUnavailable,
+			}
+			timeoutHandler.ServeHTTP(tw, req.WithContext(ctx.Context()))
 		})
 	}
 }
