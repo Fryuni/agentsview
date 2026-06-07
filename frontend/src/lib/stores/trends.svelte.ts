@@ -2,7 +2,7 @@ import {
   TrendsService,
 } from "../api/generated/index";
 import type { TrendsTermsResponse } from "../api/types.js";
-import { configureGeneratedClient } from "../api/runtime.js";
+import { callGenerated } from "../api/runtime.js";
 import { daysAgo, today } from "../utils/dates.js";
 
 type TrendsTermsParams = Parameters<
@@ -53,9 +53,8 @@ class TrendsStore {
     this.loading.terms = true;
     this.errors.terms = null;
     try {
-      configureGeneratedClient();
-      const data = await TrendsService.getApiV1TrendsTerms(
-        this.params(),
+      const data = await callGenerated(() =>
+        TrendsService.getApiV1TrendsTerms(this.params()),
       ) as unknown as TrendsTermsResponse;
       if (this.version === v) {
         this.response = data;

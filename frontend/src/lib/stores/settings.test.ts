@@ -22,6 +22,7 @@ vi.mock("../api/runtime.js", async (importOriginal) => {
   return {
     ...orig,
     configureGeneratedClient: vi.fn(),
+    callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
     setAuthToken: runtime.setAuthToken,
     isRemoteConnection: runtime.isRemoteConnection,
   };

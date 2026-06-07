@@ -3,7 +3,7 @@ import type {
   TopUsageSessionsResponse,
 } from "../api/types/usage.js";
 import { UsageService } from "../api/generated/index";
-import { configureGeneratedClient } from "../api/runtime.js";
+import { callGenerated } from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
 
 type UsageParams = Parameters<typeof UsageService.getApiV1UsageSummary>[0];
@@ -399,9 +399,8 @@ class UsageStore {
     // error state in place until we have a definitive result.
     if (isFirstLoad) this.errors.summary = null;
     try {
-      configureGeneratedClient();
-      const data = await UsageService.getApiV1UsageSummary(
-        this.baseParams(),
+      const data = await callGenerated(() =>
+        UsageService.getApiV1UsageSummary(this.baseParams()),
       ) as unknown as UsageSummaryResponse;
       if (this.versions.summary === v) {
         this.summary = data;
@@ -432,9 +431,8 @@ class UsageStore {
     if (isFirstLoad) this.loading.topSessions = true;
     if (isFirstLoad) this.errors.topSessions = null;
     try {
-      configureGeneratedClient();
-      const data = await UsageService.getApiV1UsageTopSessions(
-        this.baseParams(),
+      const data = await callGenerated(() =>
+        UsageService.getApiV1UsageTopSessions(this.baseParams()),
       ) as unknown as TopUsageSessionsResponse;
       if (this.versions.topSessions === v) {
         this.topSessions = data;

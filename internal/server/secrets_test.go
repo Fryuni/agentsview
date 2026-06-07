@@ -20,6 +20,20 @@ func TestHandleScanSecretsReadOnly(t *testing.T) {
 	assert.Equal(t, http.StatusNotImplemented, w.Code, "body: %s", w.Body.String())
 }
 
+func TestHumaScanSecretsReadOnly(t *testing.T) {
+	t.Parallel()
+	srv := &Server{cfg: config.Config{Host: "127.0.0.1"}} // nil engine
+	srv.mux = http.NewServeMux()
+	srv.routes()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/secrets/scan", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	w := httptest.NewRecorder()
+	srv.mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotImplemented, w.Code, "body: %s", w.Body.String())
+}
+
 // TestHandleListSecretsRevealGate verifies the endpoint rejects reveal from a
 // non-localhost or proxied request before consulting the backend (so a nil
 // SessionService is fine), and validates numeric params.

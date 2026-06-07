@@ -79,7 +79,7 @@ func (s *Server) humaScanSecrets(
 	if err := validateDateFilterValues("", in.DateFrom, in.DateTo, ""); err != nil {
 		return nil, err
 	}
-	if s.sessions == nil {
+	if s.engine == nil {
 		return nil, apiError(http.StatusNotImplemented, "not available in remote mode")
 	}
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
@@ -102,6 +102,6 @@ func (s *Server) humaScanSecrets(
 			stream.SendJSON("error", map[string]string{"error": err.Error()})
 			return
 		}
-		stream.SendJSON("done", summary)
+		stream.SendJSON("summary", summary)
 	}}, nil
 }

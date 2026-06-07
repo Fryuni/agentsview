@@ -5,6 +5,7 @@ import type { SearchResponse } from "../api/types.js";
 
 vi.mock("../api/runtime.js", () => ({
   configureGeneratedClient: vi.fn(),
+  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
   withAbort: async <T>(promise: Promise<T> & { cancel?: () => void }, signal?: AbortSignal) => {
     if (signal) {
       if (signal.aborted) {

@@ -6,7 +6,7 @@
     type DbWorktreeProjectMapping,
     type WorktreeMappingRequest,
   } from "../../api/generated/index";
-  import { configureGeneratedClient } from "../../api/runtime.js";
+  import { callGenerated } from "../../api/runtime.js";
 
   interface WorktreeMappingsResponse {
     machine: string;
@@ -33,9 +33,10 @@
     loading = true;
     error = "";
     try {
-      configureGeneratedClient();
       const res =
-        await SettingsService.getApiV1SettingsWorktreeMappings() as unknown as WorktreeMappingsResponse;
+        await callGenerated(() =>
+          SettingsService.getApiV1SettingsWorktreeMappings(),
+        ) as unknown as WorktreeMappingsResponse;
       machine = res.machine;
       mappings = res.mappings;
     } catch (err) {
@@ -74,16 +75,18 @@
     applyMessage = "";
     try {
       if (editingId == null) {
-        configureGeneratedClient();
-        await SettingsService.postApiV1SettingsWorktreeMappings({
-          requestBody: input,
-        });
+        await callGenerated(() =>
+          SettingsService.postApiV1SettingsWorktreeMappings({
+            requestBody: input,
+          }),
+        );
       } else {
-        configureGeneratedClient();
-        await SettingsService.putApiV1SettingsWorktreeMappingsId({
-          id: String(editingId),
-          requestBody: input,
-        });
+        await callGenerated(() =>
+          SettingsService.putApiV1SettingsWorktreeMappingsId({
+            id: String(editingId),
+            requestBody: input,
+          }),
+        );
       }
       resetForm();
       await loadMappings();
@@ -99,10 +102,11 @@
     error = "";
     applyMessage = "";
     try {
-      configureGeneratedClient();
-      await SettingsService.deleteApiV1SettingsWorktreeMappingsId({
-        id: String(id),
-      });
+      await callGenerated(() =>
+        SettingsService.deleteApiV1SettingsWorktreeMappingsId({
+          id: String(id),
+        }),
+      );
       if (editingId === id) resetForm();
       await loadMappings();
     } catch (err) {
@@ -117,9 +121,10 @@
     error = "";
     applyMessage = "";
     try {
-      configureGeneratedClient();
       const res =
-        await SettingsService.postApiV1SettingsWorktreeMappingsApply() as ApplyWorktreeMappingsResponse;
+        await callGenerated(() =>
+          SettingsService.postApiV1SettingsWorktreeMappingsApply(),
+        ) as ApplyWorktreeMappingsResponse;
       applyMessage = `${res.updated_sessions} updated, ${res.matched_sessions} matched`;
     } catch (err) {
       error = err instanceof Error ? err.message : "Failed to apply mappings";

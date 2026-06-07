@@ -14,6 +14,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock('../api/runtime.js', () => ({
   configureGeneratedClient: vi.fn(),
+  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
   withAbort: <T>(promise: Promise<T>) => promise,
 }));
 

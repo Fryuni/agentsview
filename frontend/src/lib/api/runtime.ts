@@ -128,6 +128,21 @@ export function generatedErrorMessage(err: GeneratedApiError): string {
   return err.message || `API ${err.status}`;
 }
 
+export async function callGenerated<T>(
+  request: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  configureGeneratedClient();
+  try {
+    return await withAbort(request(), signal);
+  } catch (err) {
+    if (err instanceof GeneratedApiError) {
+      throw new ApiError(err.status, generatedErrorMessage(err));
+    }
+    throw err;
+  }
+}
+
 export interface CancelableLike<T> extends Promise<T> {
   cancel: () => void;
 }

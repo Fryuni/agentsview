@@ -57,6 +57,7 @@ vi.mock("../api/client.js", () => ({
 
 vi.mock("../api/runtime.js", () => ({
   configureGeneratedClient: vi.fn(),
+  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
 }));
 
 vi.mock("../api/generated/index", () => ({

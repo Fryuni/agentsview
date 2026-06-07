@@ -11,7 +11,7 @@ import type {
   SignalsAnalyticsResponse,
 } from "../api/types.js";
 import { AnalyticsService } from "../api/generated/index";
-import { configureGeneratedClient } from "../api/runtime.js";
+import { callGenerated } from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
 
 type AnalyticsParams = Parameters<
@@ -409,9 +409,8 @@ class AnalyticsStore {
     // a definitive result. First-load clears up front so we start
     // fresh.
     if (isFirstLoad) this.errors[panel] = null;
-    configureGeneratedClient();
     try {
-      const data = await fetchRequest();
+      const data = await callGenerated(fetchRequest);
       if (this.versions[panel] === v) {
         onSuccess(data);
         this.errors[panel] = null;

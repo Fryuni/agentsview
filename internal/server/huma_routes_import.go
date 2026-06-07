@@ -16,8 +16,16 @@ import (
 func (s *Server) registerImportRoutes() {
 	group := newRouteGroup(s.api, "/api/v1/import", "Import")
 
-	stream(s, group, http.MethodPost, "/claude-ai", "Import Claude.ai archive", s.humaImportClaudeAI)
-	stream(s, group, http.MethodPost, "/chatgpt", "Import ChatGPT archive", s.humaImportChatGPT)
+	stream(
+		s, group, http.MethodPost, "/claude-ai",
+		"Import Claude.ai archive", s.humaImportClaudeAI,
+		streamJSONResponse(),
+	)
+	stream(
+		s, group, http.MethodPost, "/chatgpt",
+		"Import ChatGPT archive", s.humaImportChatGPT,
+		streamJSONResponse(),
+	)
 }
 
 type importArchiveInput struct {

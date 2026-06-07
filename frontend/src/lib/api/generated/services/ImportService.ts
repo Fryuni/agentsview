@@ -8,7 +8,7 @@ import { request as __request } from '../core/request';
 export class ImportService {
   /**
    * Import ChatGPT archive
-   * @returns string OK
+   * @returns any OK
    * @throws ApiError
    */
   public static postApiV1ImportChatgpt({
@@ -22,7 +22,7 @@ export class ImportService {
     formData?: {
       file: Blob;
     },
-  }): CancelablePromise<string> {
+  }): CancelablePromise<Record<string, any>> {
     return __request(OpenAPI, {
       method: 'POST',
       url: '/api/v1/import/chatgpt',
@@ -48,7 +48,7 @@ export class ImportService {
   }
   /**
    * Import Claude.ai archive
-   * @returns string OK
+   * @returns any OK
    * @throws ApiError
    */
   public static postApiV1ImportClaudeAi({
@@ -62,7 +62,7 @@ export class ImportService {
     formData?: {
       file: Blob;
     },
-  }): CancelablePromise<string> {
+  }): CancelablePromise<Record<string, any>> {
     return __request(OpenAPI, {
       method: 'POST',
       url: '/api/v1/import/claude-ai',

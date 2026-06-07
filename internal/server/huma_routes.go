@@ -224,8 +224,10 @@ func deleteRoute[I, O any](
 func stream[I any](
 	_ *Server, group routeGroup, method, path, summary string,
 	handler func(context.Context, *I) (*huma.StreamResponse, error),
+	options ...func(*huma.Operation),
 ) {
-	registerRoute(group, method, path, summary, handler, streamResponse())
+	routeOptions := append([]func(*huma.Operation){streamResponse()}, options...)
+	registerRoute(group, method, path, summary, handler, routeOptions...)
 }
 
 func raw[I any](
@@ -295,6 +297,25 @@ func streamResponse() func(*huma.Operation) {
 					"text/event-stream": {Schema: &huma.Schema{Type: huma.TypeString}},
 				},
 			},
+		}
+	}
+}
+
+func streamJSONResponse() func(*huma.Operation) {
+	return func(op *huma.Operation) {
+		if op.Responses == nil {
+			op.Responses = map[string]*huma.Response{}
+		}
+		resp := op.Responses["200"]
+		if resp == nil {
+			resp = &huma.Response{Description: "OK"}
+			op.Responses["200"] = resp
+		}
+		if resp.Content == nil {
+			resp.Content = map[string]*huma.MediaType{}
+		}
+		resp.Content["application/json"] = &huma.MediaType{
+			Schema: &huma.Schema{Type: huma.TypeObject},
 		}
 	}
 }

@@ -631,6 +631,38 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 	assert.Equal(t, []string{"auto", "custom", "clipboard"}, mode.Enum)
 }
 
+func TestOpenAPIEndpointDocumentsImportResponseContentTypes(t *testing.T) {
+	te := setup(t)
+
+	w := te.get(t, "/api/openapi.json")
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	type openAPIResponse struct {
+		Content map[string]struct{} `json:"content"`
+	}
+	type openAPIOperation struct {
+		Responses map[string]openAPIResponse `json:"responses"`
+	}
+	var spec struct {
+		Paths map[string]map[string]openAPIOperation `json:"paths"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+
+	for _, path := range []string{
+		"/api/v1/import/claude-ai",
+		"/api/v1/import/chatgpt",
+	} {
+		pathItem, ok := spec.Paths[path]
+		require.True(t, ok, "spec missing path %s", path)
+		op, ok := pathItem["post"]
+		require.True(t, ok, "spec missing operation post %s", path)
+		response, ok := op.Responses["200"]
+		require.True(t, ok, "post %s missing 200 response", path)
+		require.Contains(t, response.Content, "text/event-stream")
+		require.Contains(t, response.Content, "application/json")
+	}
+}
+
 func (te *testEnv) post(
 	t *testing.T, path string, body string,
 ) *httptest.ResponseRecorder {
@@ -813,6 +845,18 @@ func parseSSE(body string) []SSEEvent {
 		events = append(events, currentEvent)
 	}
 	return events
+}
+
+func TestHumaScanSecretsEmitsSummaryEvent(t *testing.T) {
+	t.Parallel()
+	te := setup(t)
+
+	w := te.post(t, "/api/v1/secrets/scan", "")
+
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	events := parseSSE(w.Body.String())
+	assert.NotEmpty(t, events)
+	assert.Equal(t, "summary", events[len(events)-1].Event)
 }
 
 func (te *testEnv) waitForSSEEvent(t *testing.T, w *flushRecorder, expectedEvent string, timeout time.Duration) {
