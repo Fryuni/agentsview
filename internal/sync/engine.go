@@ -484,10 +484,10 @@ func (e *Engine) classifyOnePath(
 				}, true
 			}
 
-			// Subagent: project/session/subagents/agent-*.jsonl
-			if len(parts) == 4 && parts[2] == "subagents" {
+			// Subagent: project/session/subagents/**/agent-*.jsonl
+			if len(parts) >= 4 && parts[2] == "subagents" {
 				stem := strings.TrimSuffix(
-					parts[3], ".jsonl",
+					parts[len(parts)-1], ".jsonl",
 				)
 				if !strings.HasPrefix(stem, "agent-") {
 					continue
