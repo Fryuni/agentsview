@@ -179,14 +179,16 @@ func TestExecuteCLIWithLegacyFlagCompatWarnsOnce(t *testing.T) {
 func TestRootHelpDocumentsRemoteHosts(t *testing.T) {
 	help, err := executeCommand(newRootCommand(), "--help")
 	require.NoError(t, err, "Execute")
-	assert.Contains(t, help, "remote_hosts",
-		"root help should document the remote_hosts config block")
+	for _, want := range []string{"remote_hosts", "passwordless"} {
+		assert.Contains(t, help, want,
+			"root help should document %q", want)
+	}
 }
 
 func TestSyncHelpMentionsConfiguredHosts(t *testing.T) {
 	help, err := executeCommand(newRootCommand(), "sync", "--help")
 	require.NoError(t, err, "Execute")
-	for _, want := range []string{"remote_hosts", "--host"} {
+	for _, want := range []string{"remote_hosts", "--host", "passwordless"} {
 		assert.Contains(t, help, want, "sync help missing %q", want)
 	}
 }
