@@ -463,7 +463,7 @@ func FindClaudeSourceFile(
 	}
 
 	// Subagent files live under session directories:
-	// <project>/<session>/subagents/agent-<id>.jsonl
+	// <project>/<session>/subagents/**/agent-<id>.jsonl
 	if strings.HasPrefix(sessionID, "agent-") {
 		for _, entry := range entries {
 			if !entry.IsDir() {
@@ -480,12 +480,22 @@ func FindClaudeSourceFile(
 				if !sd.IsDir() {
 					continue
 				}
-				candidate := filepath.Join(
-					projDir, sd.Name(),
-					"subagents", target,
+				var found string
+				subagentsDir := filepath.Join(
+					projDir, sd.Name(), "subagents",
 				)
-				if _, err := os.Stat(candidate); err == nil {
-					return candidate
+				_ = filepath.WalkDir(
+					subagentsDir,
+					func(path string, d os.DirEntry, err error) error {
+						if err != nil || d.IsDir() || d.Name() != target {
+							return nil
+						}
+						found = path
+						return filepath.SkipAll
+					},
+				)
+				if found != "" {
+					return found
 				}
 			}
 		}

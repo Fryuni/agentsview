@@ -249,6 +249,14 @@ func TestFindClaudeSourceFile(t *testing.T) {
 			wantFile: filepath.Join("project-a", "parent-sess", "subagents", "agent-sub1.jsonl"),
 		},
 		{
+			name: "Nested workflow subagent",
+			files: map[string]string{
+				filepath.Join("project-a", "parent-sess", "subagents", "workflows", "wf-123", "agent-deep.jsonl"): "{}",
+			},
+			targetID: "agent-deep",
+			wantFile: filepath.Join("project-a", "parent-sess", "subagents", "workflows", "wf-123", "agent-deep.jsonl"),
+		},
+		{
 			name: "Nonexistent",
 			files: map[string]string{
 				filepath.Join("project-a", "session-abc.jsonl"): "{}",
