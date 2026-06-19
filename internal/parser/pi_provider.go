@@ -197,9 +197,7 @@ func newPiSourceSet(roots []string) DirectoryJSONLSourceSet {
 }
 
 func isPiSourcePath(root, path string) bool {
-	name := filepath.Base(path)
-	return strings.HasSuffix(name, ".jsonl") &&
-		IsValidSessionID(strings.TrimSuffix(name, ".jsonl"))
+	return strings.HasSuffix(filepath.Base(path), ".jsonl")
 }
 
 func piSessionIDFromPath(root, path string) string {

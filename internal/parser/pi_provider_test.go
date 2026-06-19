@@ -80,6 +80,36 @@ func TestPiProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, sourcePath, changed[0].DisplayPath)
 }
 
+func TestPiProviderDiscoveryAcceptsSessionHeaderInNonSessionIDFilename(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "encoded-cwd", "2025.01.01.jsonl")
+	writeSourceFile(t, sourcePath, piProviderFixture("header-session-id"))
+
+	provider, ok := NewProvider(AgentPi, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: discovered[0],
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, "pi:header-session-id", outcome.Results[0].Result.Session.ID)
+
+	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "2025.01.01",
+	})
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
 func TestPiProviderDiscoversSymlinkedCWDDirectory(t *testing.T) {
 	root := t.TempDir()
 	targetDir := t.TempDir()
