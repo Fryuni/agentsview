@@ -80,6 +80,10 @@ func (cfg ProviderConfig) Clone() ProviderConfig {
 	return cfg
 }
 
+func (cfg ProviderConfig) RootsCopy() []string {
+	return append([]string(nil), cfg.Roots...)
+}
+
 type Provider interface {
 	Definition() AgentDef
 	Capabilities() Capabilities
@@ -101,10 +105,14 @@ type Provider interface {
 `ProviderFactory` is the registry surface. `Provider` is a config-bound instance
 created by `NewProvider` for one engine, with that engine's configured roots and
 machine. `NewProvider` implementations must clone `ProviderConfig` before
-storing it or passing roots into source helpers, so later caller mutation cannot
-change provider behavior. This keeps changed-path classification root-aware
-without requiring mutable singleton providers or passing raw roots through every
-engine call.
+storing it. Every retained owner of root slices must get its own copy: one for
+`ProviderBase.Config`, separate copies for source helpers, and separate copies
+inside helper constructors that retain roots. This keeps later caller mutation
+and helper-local normalization from changing another component's view of roots.
+If `ProviderConfig` later gains map, slice, or pointer fields, `Clone` must be
+updated to preserve the same snapshot invariant. This keeps changed-path
+classification root-aware without requiring mutable singleton providers or
+passing raw roots through every engine call.
 
 `ProviderBase` implements every optional source method with safe zero-value
 no-op behavior. It does not implement `Parse`, so a concrete provider cannot
@@ -154,17 +162,18 @@ type CodexProvider struct {
 }
 
 func NewCodexProvider(cfg ProviderConfig) *CodexProvider {
-	cfg = cfg.Clone()
+	config := cfg.Clone()
+	sourceRoots := config.RootsCopy()
 	return &CodexProvider{
 		ProviderBase: ProviderBase{
 			Def:    codexAgentDef(),
 			Caps:   codexCapabilities(),
-			Config: cfg,
+			Config: config,
 		},
 		sources: SiblingMetadataSourceSet{
 			Base: JSONLSourceSet{
 				Agent:      AgentCodex,
-				Roots:      cfg.Roots,
+				Roots:      sourceRoots,
 				Extensions: []string{".jsonl"},
 				Recursive:  true,
 			},
@@ -236,17 +245,18 @@ type QwenProvider struct {
 }
 
 func NewQwenProvider(cfg ProviderConfig) *QwenProvider {
-	cfg = cfg.Clone()
+	config := cfg.Clone()
+	sourceRoots := config.RootsCopy()
 	return &QwenProvider{
 		ProviderBase: ProviderBase{
 			Def:    qwenAgentDef(),
 			Caps:   qwenCapabilities(),
-			Config: cfg,
+			Config: config,
 		},
 		sources: DirectoryJSONLSourceSet{
 			JSONLSourceSet: JSONLSourceSet{
 				Agent:      AgentQwen,
-				Roots:      cfg.Roots,
+				Roots:      sourceRoots,
 				Extensions: []string{".jsonl"},
 				Recursive:  true,
 			},
@@ -500,9 +510,9 @@ Runtime behavior:
   current parser data version for that session.
 - `DataVersionNeedsRetry` means successful fallback results may be written, but
   the session remains eligible for a future parse at the current data version.
-  The engine must not persist a current data-version marker or clean skip-cache
-  entry for that session. `RetryReason` records why, for example an
-  Antigravity-style lower-resolution fallback.
+  The engine must not persist a current data-version marker for that session.
+  `RetryReason` records why, for example an Antigravity-style lower-resolution
+  fallback.
 - `DataVersionUnspecified` is allowed only during migration adapters; provider
   harness tests should require new providers to set either `DataVersionCurrent`
   or `DataVersionNeedsRetry` for every returned result.
@@ -510,6 +520,13 @@ Runtime behavior:
   be current while another result from the same source needs retry, and a
   retryable `SourceError` affects only the failed session unless the provider
   reports a whole-source `error`.
+- Data-version writes are per result, but clean skip-cache persistence remains
+  source/fingerprint scoped. The engine may write a clean skip-cache entry for a
+  `SourceRef` only when all returned results are `DataVersionCurrent` and there
+  are no retryable `SourceErrors`. Any `DataVersionNeedsRetry` result or
+  retryable per-session error suppresses the clean skip-cache entry for the
+  whole `FingerprintKey`, so future sync can retry the stale session even if
+  other sessions from the same source are current.
 - During a partial multi-session parse, existing persisted rows that are absent
   from `Results` are retained unless their IDs are listed in
   `ExcludedSessionIDs` or the provider completes a clean `ForceReplace` parse
