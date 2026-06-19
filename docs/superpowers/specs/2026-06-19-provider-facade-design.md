@@ -98,7 +98,7 @@ type Provider interface {
 	ParseIncremental(
 		context.Context,
 		IncrementalRequest,
-	) (IncrementalOutcome, bool, error)
+	) (IncrementalOutcome, IncrementalStatus, error)
 }
 ```
 
@@ -124,13 +124,38 @@ type ProviderBase struct {
 	Caps   Capabilities
 	Config ProviderConfig
 }
+
+var ErrUnsupportedProviderFeature = errors.New("unsupported provider feature")
+
+type UnsupportedProviderFeatureError struct {
+	Provider AgentType
+	Feature  string
+}
+
+func (err UnsupportedProviderFeatureError) Error() string {
+	return string(err.Provider) + ": unsupported provider feature " + err.Feature
+}
+
+func (err UnsupportedProviderFeatureError) Unwrap() error {
+	return ErrUnsupportedProviderFeature
+}
 ```
 
 `ProviderBase` provides `Definition`, `Capabilities`, empty discovery, empty
 watch plans, no changed-path classification, no source lookup, unsupported
-fingerprints, and `(IncrementalOutcome{}, false, nil)` for incremental parsing.
-That keeps the engine call surface uniform: every provider can be called through
-the full `Provider` interface without feature-specific nil checks.
+fingerprints, and `(IncrementalOutcome{}, IncrementalUnsupported, nil)` for
+incremental parsing. Unsupported methods that report an error use
+`ErrUnsupportedProviderFeature`, so callers can distinguish "feature is absent"
+from I/O, database, or parser failures with `errors.Is`. That keeps the engine
+call surface uniform: every provider can be called through the full `Provider`
+interface without feature-specific nil checks.
+
+Unsupported defaults are still contract checks, not fallback policy. Any
+provider that returns a `SourceRef` from discovery, changed-path classification,
+lookup, or another provider source path must implement `Fingerprint` for that
+reference. The engine treats unsupported fingerprinting for a returned source as
+a provider contract failure; it must not silently use a zero fingerprint, mark
+the source clean, or downgrade to an unspecified full parse path.
 
 Reusable source helpers must not be generic indirection interfaces or provider
 base classes. They are plain source-set structs such as `JSONLSourceSet`,
@@ -147,6 +172,26 @@ var _ Provider = (*CodexProvider)(nil)
 
 Embedding and delegation examples must be compile-tested as part of the provider
 harness, so the documented pattern cannot drift into impossible Go.
+
+## Provider Lifecycle And Concurrency
+
+`NewProvider` returns a config-bound provider instance for one sync engine.
+Provider instances are long-lived enough to serve full sync, live watch sync,
+source lookup, diagnostics, export, and parse-diff calls for that engine.
+
+Provider methods must be safe for concurrent calls. Implementations should keep
+configuration and source helper fields immutable after construction. Any cache,
+lazy initialization, database handle, or source index stored on the provider
+must use normal Go synchronization or be confined to one method call. Providers
+must honor `context.Context` cancellation for filesystem, database, and parser
+work that can block.
+
+The engine may pass `SourceRef` values between goroutines and queue them for
+later work against the same provider instance. `SourceRef.Opaque` therefore must
+be immutable, safe to read concurrently, and valid for the life of the provider
+instance. It must not contain unguarded mutable state or open handles that
+require engine cleanup. When a source needs a handle, the provider should store
+stable keys in `Opaque` and open or manage the handle inside provider methods.
 
 ## Embedding Pattern
 
@@ -316,6 +361,9 @@ Rules:
 - `FingerprintKey` is the DB lookup key used for skip/data-version checks.
 - `ProjectHint` is advisory and can be empty.
 - `Opaque` is internal provider state. The engine treats it as an opaque token.
+- `Opaque` is never persisted or logged, must be immutable for engine callers,
+  and must remain usable when `SourceRef` is queued across goroutines for the
+  lifetime of the provider instance.
 
 Backwards compatibility:
 
@@ -500,11 +548,16 @@ Runtime behavior:
 - Multi-session providers return one `ParseResultOutcome` per successfully
   parsed session and `SourceErrors` for per-session failures, so good sessions
   can still be ingested.
+- All session IDs in parse outcomes use the persisted normalized/full session ID
+  namespace. That includes `ParseResultOutcome.Result.Session.ID`,
+  `ExcludedSessionIDs`, and `SourceError.SessionID`. Raw upstream IDs may appear
+  in provider internals, diagnostics, or lookup requests, but the engine
+  compares outcome IDs only against persisted full session IDs.
 - `SourceError.SessionID` is required for per-session failures from
   multi-session providers. `SourceKey` and `DisplayPath` are diagnostic source
   identifiers, not substitutes for persisted session identity. If the provider
-  cannot isolate a failure to a session ID, it must return a whole-source
-  `error` instead of a `SourceError`.
+  cannot isolate a failure to a persisted full session ID, it must return a
+  whole-source `error` instead of a `SourceError`.
 - `Retryable` decides whether a failure can be cached by mtime.
 - `ForceReplace` is the generic signal for full parses that must rewrite
   existing ordinals.
@@ -589,15 +642,40 @@ type IncrementalOutcome struct {
 	PeakContextTokens    int
 	HasTotalOutputTokens bool
 	HasPeakContextTokens bool
-	ForceFullParse       bool
 	ForceReplace         bool
 }
+
+type IncrementalStatus uint8
+
+const (
+	IncrementalUnsupported IncrementalStatus = iota
+	IncrementalNoNewData
+	IncrementalApplied
+	IncrementalNeedsFullParse
+)
 ```
 
-`ProviderBase.ParseIncremental` returns `(IncrementalOutcome{}, false, nil)`.
-Providers that support append-only incremental parsing set the relevant source
-capability and implement the method. Typed full-parse fallback replaces
-provider-specific error checks in the engine.
+`ProviderBase.ParseIncremental` returns
+`(IncrementalOutcome{}, IncrementalUnsupported, nil)`. Providers that support
+append-only incremental parsing set the relevant source capability and implement
+the method.
+
+Incremental status semantics:
+
+- `IncrementalUnsupported`: this provider does not implement incremental append
+  for the requested source; the engine should run the normal full parse path.
+- `IncrementalNoNewData`: the source is valid and no append was needed; the
+  engine may update freshness metadata without writing messages.
+- `IncrementalApplied`: `IncrementalOutcome` contains appended messages and
+  counters that should be written.
+- `IncrementalNeedsFullParse`: the provider inspected the source but cannot
+  safely append; the engine must run the normal full parse path.
+
+Errors from `ParseIncremental` are real failures for the attempted incremental
+operation. The engine uses `IncrementalStatus`, not provider-specific error
+strings or a bare boolean, to decide whether to fall back to full parsing.
+`IncrementalRequest.SessionID` and `IncrementalOutcome.SessionID` use the same
+persisted full session ID namespace as normal parse outcomes.
 
 ## Capabilities
 
@@ -767,7 +845,8 @@ The generic engine flow becomes:
 1. Ask each provider for `SourceFingerprint`.
 1. Run generic skip/data-version checks using `FingerprintKey` and fingerprint
    fields.
-1. Attempt incremental parsing when the provider declares and implements it.
+1. Attempt incremental parsing when the provider declares and implements it, and
+   interpret the result through `IncrementalStatus`.
 1. Call provider `Parse` for full parses.
 1. Apply existing normalization and DB write paths to each
    `ParseResultOutcome.Result` value.
@@ -795,6 +874,8 @@ Source lookup becomes:
 The engine must treat stored `file_path` as an advisory compatibility key. It
 must not check that path first or assume it is a filesystem path, because some
 providers expose virtual paths or logical sessions inside a shared source.
+`FindSourceRequest.RawSessionID` is lookup input only; returned parse outcomes,
+source errors, and exclusions still use persisted full session IDs.
 
 ## Registry
 
@@ -830,24 +911,36 @@ The implementation should migrate all providers, grouped by source pattern:
    providers.
 1. Migrate simple JSONL providers with acceptance tests for discovery,
    fingerprint, parse output, skip-cache metadata, and data-version behavior.
+   Run provider-vs-legacy parity assertions for this group before it becomes
+   provider-backed by default.
 1. Add and migrate sibling/composite source providers with acceptance tests for
    watch planning, composite fingerprints, sidecar/title refreshes, and changed
-   path classification.
+   path classification. Run provider-vs-legacy parity assertions for this group
+   before it becomes provider-backed by default.
 1. Add and migrate virtual-path and SQLite fan-out providers with acceptance
    tests for stored advisory paths, logical session lookup, per-session errors,
-   and source mtime behavior.
+   and source mtime behavior. Run provider-vs-legacy parity assertions for this
+   group before it becomes provider-backed by default.
 1. Add and migrate non-file import/database providers with acceptance tests for
-   `FindSource`, fingerprinting, and unsupported source mechanics.
-1. Move source-processing callers onto providers: full sync, changed-path sync,
-   and `SyncSingleSession`.
-1. Move lookup/watch callers onto providers: session watch flows, export/source
-   lookup, source mtime, and token-usage raw source probing.
-1. Move diagnostic and comparison callers onto providers: parse-diff and parse
-   diagnostics.
+   `FindSource`, fingerprinting, and unsupported source mechanics. Run
+   provider-vs-legacy parity assertions for this group before it becomes
+   provider-backed by default.
+1. Move source-processing callers onto providers behind parity assertions: full
+   sync, changed-path sync, and `SyncSingleSession`. Each caller becomes default
+   only after its parsed output, skip-cache, data-version, source metadata, and
+   diagnostics parity passes for the provider groups it touches.
+1. Move lookup/watch callers onto providers behind parity assertions: session
+   watch flows, export/source lookup, source mtime, and token-usage raw source
+   probing. Each caller becomes default only after lookup freshness, virtual
+   path, source mtime, and raw probing parity passes.
+1. Move diagnostic and comparison callers onto providers behind parity
+   assertions: parse-diff and parse diagnostics. Each caller becomes default
+   only after report shape and source-error parity passes.
 1. Run a transitional parity phase where old `processFile` and new provider
-   dispatch can be compared in tests. The parity assertions must include parsed
-   output, excluded IDs, skip-cache decisions, data-version writes, retry-needed
-   outcomes, persisted source metadata, and diagnostics.
+   dispatch can be compared in tests across all migrated groups. The parity
+   assertions must include parsed output, excluded IDs, skip-cache decisions,
+   data-version writes, retry-needed outcomes, persisted source metadata, and
+   diagnostics.
 1. Replace `processFile` switch with generic provider dispatch only after the
    grouped parity tests pass.
 1. Remove or deprecate old `AgentDef` source callback fields after all callers
@@ -865,7 +958,12 @@ Required tests:
 - Provider factory instantiation: configured roots and machine are copied into
   config-bound providers and do not mutate singleton registry state.
 - `ProviderBase` contract tests: zero-value optional methods are callable and
-  return the documented no-op results.
+  return the documented no-op or typed unsupported results.
+- Unsupported-feature tests proving the engine distinguishes
+  `ErrUnsupportedProviderFeature` from I/O and parse errors, and treats
+  unsupported fingerprinting for returned sources as a contract failure.
+- Provider concurrency tests or race tests for shared provider instances and
+  immutable `SourceRef.Opaque` payloads.
 - Compile-tested embedding examples for `ProviderBase`, named JSONL source-set
   fields, sibling metadata source-set fields, and explicit concrete method
   overrides.
@@ -882,6 +980,9 @@ Required tests:
   groups.
 - Stored advisory path tests proving `FindSourceRequest.StoredFilePath` is
   interpreted only by the provider.
+- Outcome ID namespace tests proving `ParseResult` session IDs,
+  `ExcludedSessionIDs`, and `SourceError.SessionID` use persisted full session
+  IDs even when lookup starts with a raw upstream ID.
 - SQLite fan-out source key, virtual path, and per-session error tests.
 - Data-version tests for current, skipped, retry-needed, and mixed per-session
   parse outcomes from one source.
@@ -892,10 +993,14 @@ Required tests:
   sources, with the pass criteria from the fingerprint section.
 - Provider harness tests for discovery, fingerprint, parse, source lookup, and
   optional incremental parsing.
+- Incremental parsing tests for `IncrementalUnsupported`,
+  `IncrementalNoNewData`, `IncrementalApplied`, `IncrementalNeedsFullParse`, and
+  real incremental errors.
 - Parse diagnostic tests proving stable source fields are reported and opaque
   payloads are not serialized or logged.
 - Migration parity tests comparing provider output to current parser/process
-  output during the transition, including skip-cache, data-version writes,
+  output after each provider group and before each caller surface becomes
+  provider-backed by default, including skip-cache, data-version writes,
   persisted source metadata, diagnostics, excluded IDs, and retry-needed
   behavior.
 - Sync integration tests for incremental Claude/Codex, multi-session sources,
@@ -920,7 +1025,8 @@ decisions from those structures:
   affected source/session current for the parser data version;
 - non-retryable per-session failure: eligible for failure-cache persistence, but
   not for a clean source skip-cache entry;
-- full parse fallback from incremental: typed outcome flag;
+- full parse fallback from incremental: `IncrementalNeedsFullParse`;
+- unsupported optional provider feature: `ErrUnsupportedProviderFeature`;
 - successful lower-resolution fallback: per-result `DataVersionNeedsRetry` plus
   `RetryReason`;
 - skipped non-session source: explicit `SkipReason`;
