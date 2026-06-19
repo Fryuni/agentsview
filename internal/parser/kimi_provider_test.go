@@ -165,6 +165,49 @@ func TestKimiProviderParse(t *testing.T) {
 	assert.Len(t, outcome.Results[0].Result.Messages, 2)
 }
 
+func TestKimiProviderParseNewLayoutRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	rawID := "wd_kimi-code_057f5c09ee3f:main:session_uuid-2"
+	sourcePath := filepath.Join(
+		root,
+		"wd_kimi-code_057f5c09ee3f",
+		"session_uuid-2",
+		"agents",
+		"main",
+		"wire.jsonl",
+	)
+	writeSourceFile(t, sourcePath, kimiProviderFixture("new layout provider question"))
+
+	provider, ok := NewProvider(AgentKimi, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		FullSessionID: "host~kimi:" + rawID,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sourcePath, source.DisplayPath)
+	assert.Equal(t, "kimi-code", source.ProjectHint)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:      source,
+		Fingerprint: SourceFingerprint{Key: sourcePath, Hash: "abc123"},
+	})
+	require.NoError(t, err)
+	require.True(t, outcome.ResultSetComplete)
+	require.Len(t, outcome.Results, 1)
+	session := outcome.Results[0].Result.Session
+	assert.Equal(t, "kimi:"+rawID, session.ID)
+	assert.Equal(t, "kimi-code", session.Project)
+	assert.Equal(t, "devbox", session.Machine)
+	assert.Equal(t, sourcePath, session.File.Path)
+	assert.Equal(t, "abc123", session.File.Hash)
+	assert.Len(t, outcome.Results[0].Result.Messages, 2)
+}
+
 func kimiProviderFixture(firstMessage string) string {
 	return `{"type":"metadata","protocol_version":"1.3"}` + "\n" +
 		`{"timestamp":1704067200.0,"message":{"type":"TurnBegin","payload":{"user_input":[{"type":"text","text":"` + firstMessage + `"}]}}}` + "\n" +
