@@ -66,7 +66,7 @@ func TestCortexProviderSourceMethods(t *testing.T) {
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.False(t, plan.Roots[0].Recursive)
-	assert.Equal(t, []string{"*.json"}, plan.Roots[0].IncludeGlobs)
+	assert.Equal(t, []string{"*.json", "*.history.jsonl"}, plan.Roots[0].IncludeGlobs)
 
 	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
 		FullSessionID: "host~cortex:" + cortexTestUUID,
@@ -98,6 +98,61 @@ func TestCortexProviderSourceMethods(t *testing.T) {
 	changed, err := provider.SourcesForChangedPath(
 		context.Background(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove", WatchRoot: root},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, sourcePath, changed[0].DisplayPath)
+}
+
+func TestCortexProviderClassifiesAndFingerprintsHistoryCompanion(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, cortexTestUUID+".json")
+	historyPath := filepath.Join(root, cortexTestUUID+".history.jsonl")
+	writeSourceFile(t, sourcePath, `{
+		"session_id":"`+cortexTestUUID+`",
+		"working_directory":"/home/user/project"
+	}`)
+	writeSourceFile(
+		t,
+		historyPath,
+		`{"role":"user","id":"m1","content":[{"type":"text","text":"from history"}]}`+"\n",
+	)
+
+	provider, ok := NewProvider(AgentCortex, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: historyPath, EventKind: "write", WatchRoot: root},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, sourcePath, changed[0].DisplayPath)
+	assert.Equal(t, sourcePath, changed[0].FingerprintKey)
+
+	before, err := provider.Fingerprint(context.Background(), changed[0])
+	require.NoError(t, err)
+	assert.Equal(t, sourcePath, before.Key)
+	assert.NotEmpty(t, before.Hash)
+
+	writeSourceFile(
+		t,
+		historyPath,
+		`{"role":"user","id":"m1","content":[{"type":"text","text":"updated history"}]}`+"\n",
+	)
+	after, err := provider.Fingerprint(context.Background(), changed[0])
+	require.NoError(t, err)
+	assert.Equal(t, sourcePath, after.Key)
+	assert.NotEqual(t, before.Hash, after.Hash)
+	assert.NotEqual(t, before.Size, after.Size)
+
+	require.NoError(t, os.Remove(historyPath))
+	changed, err = provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: historyPath, EventKind: "remove", WatchRoot: root},
 	)
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
