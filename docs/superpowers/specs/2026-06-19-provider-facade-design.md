@@ -75,6 +75,11 @@ type ProviderConfig struct {
 	Machine string
 }
 
+func (cfg ProviderConfig) Clone() ProviderConfig {
+	cfg.Roots = append([]string(nil), cfg.Roots...)
+	return cfg
+}
+
 type Provider interface {
 	Definition() AgentDef
 	Capabilities() Capabilities
@@ -95,8 +100,11 @@ type Provider interface {
 
 `ProviderFactory` is the registry surface. `Provider` is a config-bound instance
 created by `NewProvider` for one engine, with that engine's configured roots and
-machine. This keeps changed-path classification root-aware without requiring
-mutable singleton providers or passing raw roots through every engine call.
+machine. `NewProvider` implementations must clone `ProviderConfig` before
+storing it or passing roots into source helpers, so later caller mutation cannot
+change provider behavior. This keeps changed-path classification root-aware
+without requiring mutable singleton providers or passing raw roots through every
+engine call.
 
 `ProviderBase` implements every optional source method with safe zero-value
 no-op behavior. It does not implement `Parse`, so a concrete provider cannot
@@ -146,6 +154,7 @@ type CodexProvider struct {
 }
 
 func NewCodexProvider(cfg ProviderConfig) *CodexProvider {
+	cfg = cfg.Clone()
 	return &CodexProvider{
 		ProviderBase: ProviderBase{
 			Def:    codexAgentDef(),
@@ -227,6 +236,7 @@ type QwenProvider struct {
 }
 
 func NewQwenProvider(cfg ProviderConfig) *QwenProvider {
+	cfg = cfg.Clone()
 	return &QwenProvider{
 		ProviderBase: ProviderBase{
 			Def:    qwenAgentDef(),
