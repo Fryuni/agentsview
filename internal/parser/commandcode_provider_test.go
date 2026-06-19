@@ -70,6 +70,35 @@ func TestCommandCodeProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, sourcePath, changed[0].DisplayPath)
 }
 
+func TestCommandCodeProviderDiscoversSymlinkedProjectDirectory(t *testing.T) {
+	root := t.TempDir()
+	realProjectDir := filepath.Join(t.TempDir(), "real-project")
+	linkProjectDir := filepath.Join(root, "linked-project")
+	if err := os.Symlink(realProjectDir, linkProjectDir); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	sourcePath := filepath.Join(linkProjectDir, "sess_123.jsonl")
+	writeSourceFile(t, filepath.Join(realProjectDir, "sess_123.jsonl"), commandCodeProviderFixture())
+
+	provider, ok := NewProvider(AgentCommandCode, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
+
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "sess_123",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sourcePath, found.DisplayPath)
+}
+
 func TestCommandCodeProviderParse(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "project", "sess_123.jsonl")

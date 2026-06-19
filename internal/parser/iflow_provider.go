@@ -120,6 +120,7 @@ func newIflowSourceSet(roots []string) DirectoryJSONLSourceSet {
 		AgentIflow,
 		roots,
 		JSONLSourceSetOptions{
+			FollowSymlinkDirs: true,
 			IncludePath:       isIflowSourcePath,
 			SessionIDFromPath: iflowSessionIDFromPath,
 		},

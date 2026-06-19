@@ -71,6 +71,41 @@ func TestIflowProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, sourcePath, changed[0].DisplayPath)
 }
 
+func TestIflowProviderDiscoversSymlinkedProjectDirectory(t *testing.T) {
+	root := t.TempDir()
+	realProjectDir := filepath.Join(t.TempDir(), "real-project")
+	linkProjectDir := filepath.Join(root, "linked-project")
+	if err := os.Symlink(realProjectDir, linkProjectDir); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	rawID := "5de701fc-7454-4858-a249-95cac4fd3b51"
+	sourcePath := filepath.Join(linkProjectDir, "session-"+rawID+".jsonl")
+	copyFixtureFile(
+		t,
+		"testdata/iflow/session-"+rawID+".jsonl",
+		filepath.Join(realProjectDir, "session-"+rawID+".jsonl"),
+	)
+
+	provider, ok := NewProvider(AgentIflow, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
+	assert.Equal(t, "linked-project", discovered[0].ProjectHint)
+
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: rawID,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sourcePath, found.DisplayPath)
+}
+
 func TestIflowProviderParse(t *testing.T) {
 	root := t.TempDir()
 	project := "test-project"
