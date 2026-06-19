@@ -51,8 +51,12 @@ func TestWorkBuddyProviderSourceMethods(t *testing.T) {
 	subagentPath := filepath.Join(
 		projectDir, sessionID, "subagents", subagentID+".jsonl",
 	)
+	nonIDSubagentPath := filepath.Join(
+		projectDir, sessionID, "subagents", "2025.01.01.jsonl",
+	)
 	writeSourceFile(t, sourcePath, workBuddyProviderFixture("hello"))
 	writeSourceFile(t, subagentPath, workBuddyProviderFixture("sub task"))
+	writeSourceFile(t, nonIDSubagentPath, workBuddyProviderFixture("dated sub task"))
 	writeSourceFile(t, filepath.Join(projectDir, "2025.01.01.jsonl"), "{}\n")
 	writeSourceFile(t, filepath.Join(projectDir, sessionID, "tool-results", "tool_123.txt"), "{}\n")
 	writeSourceFile(t, filepath.Join(root, sessionID+".jsonl"), "{}\n")
@@ -66,9 +70,13 @@ func TestWorkBuddyProviderSourceMethods(t *testing.T) {
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
-	require.Len(t, discovered, 2)
-	assert.Equal(t, []string{sourcePath, subagentPath}, sourceDisplayPaths(discovered))
-	assert.Equal(t, []string{"proj", "proj"}, sourceProjects(discovered))
+	require.Len(t, discovered, 3)
+	assert.Equal(
+		t,
+		[]string{sourcePath, nonIDSubagentPath, subagentPath},
+		sourceDisplayPaths(discovered),
+	)
+	assert.Equal(t, []string{"proj", "proj", "proj"}, sourceProjects(discovered))
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
@@ -99,6 +107,12 @@ func TestWorkBuddyProviderSourceMethods(t *testing.T) {
 
 	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
 		RawSessionID: sessionID + ":subagent:../agent-123",
+	})
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: sessionID + ":subagent:2025.01.01",
 	})
 	require.NoError(t, err)
 	assert.False(t, ok)
