@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -140,6 +141,7 @@ func newQwenPawSourceSet(roots []string) JSONLSourceSet {
 		Hash:               true,
 		FollowSymlinkDirs:  true,
 		FollowSymlinkFiles: true,
+		DescendPath:        qwenPawDescendPath,
 		IncludePath:        isQwenPawSourcePath,
 		ProjectHint:        qwenPawProjectHintFromPath,
 		SessionIDFromPath:  qwenPawSessionIDFromPath,
@@ -205,6 +207,34 @@ func qwenPawSourcePathParts(root, path string) ([]string, bool) {
 		}
 	}
 	return parts, true
+}
+
+func qwenPawDescendPath(root, path string) bool {
+	parts, ok := qwenPawSourcePathParts(root, path)
+	if !ok {
+		return false
+	}
+	switch len(parts) {
+	case 1:
+		return IsValidQwenPawIDPart(parts[0])
+	case 2:
+		return IsValidQwenPawIDPart(parts[0]) && parts[1] == "sessions"
+	case 3:
+		subdir := parts[2]
+		if parts[1] != "sessions" ||
+			!IsValidQwenPawIDPart(parts[0]) ||
+			strings.HasPrefix(subdir, ".") ||
+			!IsValidQwenPawIDPart(subdir) {
+			return false
+		}
+		info, err := os.Lstat(path)
+		if err != nil {
+			return true
+		}
+		return info.Mode()&os.ModeSymlink == 0
+	default:
+		return false
+	}
 }
 
 func qwenPawProviderCapabilities() Capabilities {

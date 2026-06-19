@@ -40,6 +40,10 @@ type JSONLSourceSetOptions struct {
 	// should enable it when legacy discovery accepted matching symlinked files
 	// and the parser reads through the symlink target.
 	FollowSymlinkFiles bool
+	// DescendPath is a directory predicate for recursive discovery. It is also
+	// applied to source ancestors during direct source classification so
+	// changed-path events cannot accept paths discovery would have pruned.
+	DescendPath func(root, path string) bool
 	// IncludePath is a path-only source predicate. It runs before Include and is
 	// also used for deleted/renamed changed paths where os.FileInfo is
 	// unavailable.
@@ -253,7 +257,7 @@ func (s JSONLSourceSet) discoverDir(
 		}
 		path := filepath.Join(dir, entry.Name())
 		if s.shouldDescend(entry, dir) {
-			if s.options.Recursive {
+			if s.options.Recursive && s.descendPathIncluded(root, path) {
 				if err := s.discoverDir(
 					ctx, root, path, sources, seen,
 				); err != nil {
@@ -292,6 +296,9 @@ func (s JSONLSourceSet) sourceForPath(path string) (SourceRef, bool) {
 		if !s.pathAllowedByRoot(root, path) {
 			continue
 		}
+		if !s.sourcePathAllowedByDescendPath(root, path) {
+			continue
+		}
 		if !s.pathIncluded(root, path) {
 			continue
 		}
@@ -322,6 +329,9 @@ func (s JSONLSourceSet) sourceForMissingPath(path string) (SourceRef, bool) {
 	path = filepath.Clean(path)
 	for _, root := range s.roots {
 		if !s.pathAllowedByRoot(root, path) {
+			continue
+		}
+		if !s.sourcePathAllowedByDescendPath(root, path) {
 			continue
 		}
 		if !s.matchesExtension(path) || !s.pathIncluded(root, path) {
@@ -409,6 +419,35 @@ func (s JSONLSourceSet) sourceRefFromPath(
 
 func (s JSONLSourceSet) pathIncluded(root, path string) bool {
 	return s.options.IncludePath == nil || s.options.IncludePath(root, path)
+}
+
+func (s JSONLSourceSet) descendPathIncluded(root, path string) bool {
+	return s.options.DescendPath == nil || s.options.DescendPath(root, path)
+}
+
+func (s JSONLSourceSet) sourcePathAllowedByDescendPath(root, path string) bool {
+	if s.options.DescendPath == nil {
+		return true
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	dir := filepath.Dir(rel)
+	if dir == "." {
+		return true
+	}
+	current := root
+	for part := range strings.SplitSeq(dir, string(filepath.Separator)) {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+		current = filepath.Join(current, part)
+		if !s.descendPathIncluded(root, current) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s JSONLSourceSet) matchesExtension(path string) bool {

@@ -189,6 +189,47 @@ func TestQwenPawProviderDiscoversSymlinkedWorkspace(t *testing.T) {
 	assert.Equal(t, "default", discovered[0].ProjectHint)
 }
 
+func TestQwenPawProviderPrunesSymlinkedSessionNamespaces(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := qwenPawProviderWriteSession(
+		t, root, "default", "", "root_1", "root question",
+	)
+	targetDir := filepath.Join(t.TempDir(), "console-target")
+	require.NoError(t, os.MkdirAll(targetDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(targetDir, "linked_1.json"),
+		[]byte(qwenPawProviderFixture("linked question")),
+		0o644,
+	))
+	linkedDir := filepath.Join(root, "default", "sessions", "linked")
+	if err := os.Symlink(targetDir, linkedDir); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	linkedPath := filepath.Join(linkedDir, "linked_1.json")
+
+	provider, ok := NewProvider(AgentQwenPaw, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:      linkedPath,
+			EventKind: "write",
+			WatchRoot: root,
+		},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, changed)
+}
+
 func qwenPawProviderWriteSession(
 	t *testing.T,
 	root string,

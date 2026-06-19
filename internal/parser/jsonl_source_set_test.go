@@ -266,6 +266,44 @@ func TestJSONLSourceSetChangedPathUsesPathOnlyFilterForDeletedFiles(t *testing.T
 	assert.Equal(t, filepath.Join(root, "session", "events.jsonl"), changed[0].DisplayPath)
 }
 
+func TestJSONLSourceSetDescendPathPrunesSources(t *testing.T) {
+	root := t.TempDir()
+	keepPath := filepath.Join(root, "keep", "session.jsonl")
+	skipPath := filepath.Join(root, "skip", "session.jsonl")
+	writeSourceFile(t, keepPath, "{}\n")
+	writeSourceFile(t, skipPath, "{}\n")
+
+	sources := NewJSONLSourceSet(AgentCodex, []string{root}, JSONLSourceSetOptions{
+		Recursive: true,
+		DescendPath: func(root, path string) bool {
+			return filepath.Base(path) != "skip"
+		},
+	})
+
+	discovered, err := sources.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, keepPath, discovered[0].DisplayPath)
+
+	changed, err := sources.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: skipPath, EventKind: "write", WatchRoot: root},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, changed)
+
+	removed, err := sources.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:      filepath.Join(root, "skip", "removed.jsonl"),
+			EventKind: "remove",
+			WatchRoot: root,
+		},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, removed)
+}
+
 func TestJSONLSourceSetDuplicateKeysKeepFirstConfiguredRoot(t *testing.T) {
 	firstRoot := t.TempDir()
 	secondRoot := t.TempDir()
