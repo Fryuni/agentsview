@@ -350,6 +350,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newCursorProviderFactory(def)
 	case AgentDeepSeekTUI:
 		return newDeepSeekTUIProviderFactory(def)
+	case AgentHermes:
+		return newHermesProviderFactory(def)
 	case AgentIflow:
 		return newIflowProviderFactory(def)
 	case AgentGptme:
