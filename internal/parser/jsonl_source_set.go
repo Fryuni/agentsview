@@ -132,6 +132,9 @@ func (s JSONLSourceSet) SourcesForChangedPath(
 	}
 	source, ok := s.sourceForPath(req.Path)
 	if !ok {
+		if !jsonlMissingPathFallbackAllowed(req) {
+			return nil, nil
+		}
 		source, ok = s.sourceForMissingPath(req.Path)
 		if !ok {
 			return nil, nil
@@ -305,6 +308,23 @@ func (s JSONLSourceSet) sourceForMissingPath(path string) (SourceRef, bool) {
 		return s.sourceRefFromPath(root, path)
 	}
 	return SourceRef{}, false
+}
+
+func jsonlMissingPathFallbackAllowed(req ChangedPathRequest) bool {
+	if req.Path == "" {
+		return false
+	}
+	if _, err := os.Lstat(req.Path); err == nil {
+		return false
+	} else if os.IsNotExist(err) {
+		return true
+	}
+	switch strings.ToLower(req.EventKind) {
+	case "remove", "removed", "delete", "deleted", "rename", "renamed":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s JSONLSourceSet) pathAllowedByRoot(root, path string) bool {

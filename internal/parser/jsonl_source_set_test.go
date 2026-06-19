@@ -216,6 +216,23 @@ func TestJSONLSourceSetChangedPathClassifiesDeletedFiles(t *testing.T) {
 	assert.Empty(t, changed)
 }
 
+func TestJSONLSourceSetChangedPathRejectsExistingNonRegularPath(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "nested", "not-a-source.jsonl")
+	require.NoError(t, os.MkdirAll(path, 0o755))
+
+	sources := NewJSONLSourceSet(AgentCodex, []string{root}, JSONLSourceSetOptions{
+		Recursive: true,
+	})
+
+	changed, err := sources.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: path, EventKind: "write", WatchRoot: root},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, changed)
+}
+
 func TestJSONLSourceSetChangedPathUsesPathOnlyFilterForDeletedFiles(t *testing.T) {
 	root := t.TempDir()
 	sources := NewJSONLSourceSet(AgentCodex, []string{root}, JSONLSourceSetOptions{
