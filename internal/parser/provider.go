@@ -344,6 +344,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newAmpProviderFactory(def)
 	case AgentCommandCode:
 		return newCommandCodeProviderFactory(def)
+	case AgentCortex:
+		return newCortexProviderFactory(def)
 	case AgentDeepSeekTUI:
 		return newDeepSeekTUIProviderFactory(def)
 	case AgentIflow:
