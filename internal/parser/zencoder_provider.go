@@ -110,8 +110,9 @@ func (p *zencoderProvider) Parse(
 
 func newZencoderSourceSet(roots []string) JSONLSourceSet {
 	return NewJSONLSourceSet(AgentZencoder, roots, JSONLSourceSetOptions{
-		IncludePath:       isZencoderSourcePath,
-		SessionIDFromPath: zencoderSessionIDFromPath,
+		FollowSymlinkFiles: true,
+		IncludePath:        isZencoderSourcePath,
+		SessionIDFromPath:  zencoderSessionIDFromPath,
 	})
 }
 

@@ -64,6 +64,44 @@ func TestAmpProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, sourcePath, changed[0].DisplayPath)
 }
 
+func TestAmpProviderSourceMethodsFollowSymlinkedSessionFile(t *testing.T) {
+	root := t.TempDir()
+	targetDir := t.TempDir()
+	threadID := "T-019ca26f-aaaa-bbbb-cccc-dddddddddddd"
+	targetPath := filepath.Join(targetDir, threadID+".json")
+	sourcePath := filepath.Join(root, threadID+".json")
+	writeSourceFile(t, targetPath, ampProviderFixture(threadID))
+	if err := os.Symlink(targetPath, sourcePath); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	provider, ok := NewProvider(AgentAmp, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
+
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		FullSessionID: "host~amp:" + threadID,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sourcePath, found.DisplayPath)
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: sourcePath, EventKind: "write", WatchRoot: root},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, sourcePath, changed[0].DisplayPath)
+}
+
 func TestAmpProviderParse(t *testing.T) {
 	root := t.TempDir()
 	threadID := "T-019ca26f-aaaa-bbbb-cccc-dddddddddddd"
@@ -139,6 +177,43 @@ func TestZencoderProviderSourceMethods(t *testing.T) {
 	changed, err := provider.SourcesForChangedPath(
 		context.Background(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove", WatchRoot: root},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, sourcePath, changed[0].DisplayPath)
+}
+
+func TestZencoderProviderSourceMethodsFollowSymlinkedSessionFile(t *testing.T) {
+	root := t.TempDir()
+	targetDir := t.TempDir()
+	targetPath := filepath.Join(targetDir, "abc-def-123.jsonl")
+	sourcePath := filepath.Join(root, "abc-def-123.jsonl")
+	writeSourceFile(t, targetPath, zencoderProviderFixture("abc-def-123"))
+	if err := os.Symlink(targetPath, sourcePath); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	provider, ok := NewProvider(AgentZencoder, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
+
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		FullSessionID: "host~zencoder:abc-def-123",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sourcePath, found.DisplayPath)
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: sourcePath, EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
 	require.Len(t, changed, 1)

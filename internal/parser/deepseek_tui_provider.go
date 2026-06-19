@@ -109,8 +109,9 @@ func (p *deepSeekTUIProvider) Parse(
 
 func newDeepSeekTUISourceSet(roots []string) JSONLSourceSet {
 	return NewJSONLSourceSet(AgentDeepSeekTUI, roots, JSONLSourceSetOptions{
-		Extensions:  []string{".json"},
-		IncludePath: isDeepSeekTUISourcePath,
+		Extensions:         []string{".json"},
+		FollowSymlinkFiles: true,
+		IncludePath:        isDeepSeekTUISourcePath,
 		SessionIDFromPath: func(root, path string) string {
 			return deepSeekTUISessionIDFromPath(path)
 		},

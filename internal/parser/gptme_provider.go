@@ -228,9 +228,10 @@ func (p *gptmeProvider) isSource(source SourceRef) bool {
 
 func newGptmeSourceSet(roots []string) JSONLSourceSet {
 	return NewJSONLSourceSet(AgentGptme, roots, JSONLSourceSetOptions{
-		Recursive:         true,
-		Hash:              true,
-		FollowSymlinkDirs: true,
+		Recursive:          true,
+		Hash:               true,
+		FollowSymlinkDirs:  true,
+		FollowSymlinkFiles: true,
 		Include: func(path string, info os.FileInfo) bool {
 			return !info.IsDir() && filepath.Base(path) == "conversation.jsonl"
 		},

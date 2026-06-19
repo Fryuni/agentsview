@@ -36,6 +36,10 @@ type JSONLSourceSetOptions struct {
 	// the configured root, so provider IncludePath filters should constrain the
 	// accepted source shape when that matters.
 	FollowSymlinkDirs bool
+	// FollowSymlinkFiles treats symlinks to regular files as sources. Providers
+	// should enable it when legacy discovery accepted matching symlinked files
+	// and the parser reads through the symlink target.
+	FollowSymlinkFiles bool
 	// IncludePath is a path-only source predicate. It runs before Include and is
 	// also used for deleted/renamed changed paths where os.FileInfo is
 	// unavailable.
@@ -258,8 +262,8 @@ func (s JSONLSourceSet) discoverDir(
 			}
 			continue
 		}
-		info, err := entry.Info()
-		if err != nil || !info.Mode().IsRegular() {
+		info, ok := s.sourceFileInfo(path)
+		if !ok {
 			continue
 		}
 		source, ok := s.sourceRef(root, path, info)
@@ -280,8 +284,8 @@ func (s JSONLSourceSet) shouldDescend(entry os.DirEntry, dir string) bool {
 
 func (s JSONLSourceSet) sourceForPath(path string) (SourceRef, bool) {
 	path = filepath.Clean(path)
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() {
+	info, ok := s.sourceFileInfo(path)
+	if !ok {
 		return SourceRef{}, false
 	}
 	for _, root := range s.roots {
@@ -294,6 +298,24 @@ func (s JSONLSourceSet) sourceForPath(path string) (SourceRef, bool) {
 		return s.sourceRef(root, path, info)
 	}
 	return SourceRef{}, false
+}
+
+func (s JSONLSourceSet) sourceFileInfo(path string) (os.FileInfo, bool) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, false
+	}
+	if info.Mode().IsRegular() {
+		return info, true
+	}
+	if !s.options.FollowSymlinkFiles || info.Mode()&os.ModeSymlink == 0 {
+		return nil, false
+	}
+	info, err = os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, false
+	}
+	return info, true
 }
 
 func (s JSONLSourceSet) sourceForMissingPath(path string) (SourceRef, bool) {

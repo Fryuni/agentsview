@@ -113,10 +113,11 @@ func newCommandCodeSourceSet(roots []string) DirectoryJSONLSourceSet {
 		AgentCommandCode,
 		roots,
 		JSONLSourceSetOptions{
-			FollowSymlinkDirs: true,
-			IncludePath:       isCommandCodeSourcePath,
-			ProjectHint:       func(root, path string) string { return "" },
-			SessionIDFromPath: commandCodeSessionIDFromPath,
+			FollowSymlinkDirs:  true,
+			FollowSymlinkFiles: true,
+			IncludePath:        isCommandCodeSourcePath,
+			ProjectHint:        func(root, path string) string { return "" },
+			SessionIDFromPath:  commandCodeSessionIDFromPath,
 		},
 	)
 }

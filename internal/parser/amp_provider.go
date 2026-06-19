@@ -109,8 +109,9 @@ func (p *ampProvider) Parse(
 
 func newAmpSourceSet(roots []string) JSONLSourceSet {
 	return NewJSONLSourceSet(AgentAmp, roots, JSONLSourceSetOptions{
-		Extensions:  []string{".json"},
-		IncludePath: isAmpSourcePath,
+		Extensions:         []string{".json"},
+		FollowSymlinkFiles: true,
+		IncludePath:        isAmpSourcePath,
 		SessionIDFromPath: func(root, path string) string {
 			return ampThreadIDFromPath(path)
 		},
