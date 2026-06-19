@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -238,16 +239,25 @@ func (s vscodeCopilotSourceSet) Fingerprint(
 	if info.IsDir() {
 		return SourceFingerprint{}, fmt.Errorf("stat %s: source is a directory", path)
 	}
-	hash, err := hashJSONLSourceFile(path)
-	if err != nil {
-		return SourceFingerprint{}, err
-	}
-	return SourceFingerprint{
+	fingerprint := SourceFingerprint{
 		Key:     firstNonEmptyJSONLString(source.FingerprintKey, source.Key, path),
 		Size:    info.Size(),
 		MTimeNS: info.ModTime().UnixNano(),
-		Hash:    hash,
-	}, nil
+	}
+	workspacePath := s.workspaceManifestForSource(path)
+	if workspacePath != "" {
+		if workspaceInfo, err := os.Stat(workspacePath); err == nil {
+			fingerprint.Size += workspaceInfo.Size()
+			if mtime := workspaceInfo.ModTime().UnixNano(); mtime > fingerprint.MTimeNS {
+				fingerprint.MTimeNS = mtime
+			}
+		}
+	}
+	fingerprint.Hash, err = vscodeCopilotSourceHash(path, workspacePath)
+	if err != nil {
+		return SourceFingerprint{}, err
+	}
+	return fingerprint, nil
 }
 
 func (s vscodeCopilotSourceSet) pathFromSource(source SourceRef) (string, string, bool) {
@@ -397,6 +407,32 @@ func (s vscodeCopilotSourceSet) sourcesForWorkspaceManifest(
 	return sources
 }
 
+func (s vscodeCopilotSourceSet) workspaceManifestForSource(path string) string {
+	for _, root := range s.roots {
+		root = filepath.Clean(root)
+		rel, ok := relUnder(root, path)
+		if !ok {
+			continue
+		}
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		if len(parts) == 4 &&
+			parts[0] == "workspaceStorage" &&
+			parts[2] == "chatSessions" &&
+			isVSCodeCopilotSessionPath(parts[3]) {
+			workspacePath := filepath.Join(
+				root,
+				"workspaceStorage",
+				parts[1],
+				"workspace.json",
+			)
+			if IsRegularFile(workspacePath) {
+				return workspacePath
+			}
+		}
+	}
+	return ""
+}
+
 func (s vscodeCopilotSourceSet) newSourceRef(root, path, project string) SourceRef {
 	return SourceRef{
 		Provider:       AgentVSCodeCopilot,
@@ -433,6 +469,23 @@ func vscodeCopilotPreferredExistingPath(path string) string {
 		}
 	}
 	return ""
+}
+
+func vscodeCopilotSourceHash(path, workspacePath string) (string, error) {
+	hash, err := hashJSONLSourceFile(path)
+	if err != nil {
+		return "", err
+	}
+	if workspacePath == "" {
+		return hash, nil
+	}
+	workspaceHash, err := hashJSONLSourceFile(workspacePath)
+	if err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	_, _ = h.Write([]byte("chat\x00" + hash + "\x00workspace\x00" + workspaceHash))
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
 func vscodeCopilotProviderCapabilities() Capabilities {

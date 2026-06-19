@@ -136,6 +136,14 @@ func TestVSCodeCopilotProviderClassifiesDeletedAndMetadataPaths(t *testing.T) {
 		[]string{jsonlPath, jsonPath},
 		sourceDisplayPaths(metadataChanged),
 	)
+	require.Len(t, metadataChanged, 2)
+	beforeMetadata, err := provider.Fingerprint(context.Background(), metadataChanged[0])
+	require.NoError(t, err)
+	writeSourceFile(t, workspacePath,
+		`{"folder":"file:///Users/alice/code/copilot-renamed-app"}`)
+	afterMetadata, err := provider.Fingerprint(context.Background(), metadataChanged[0])
+	require.NoError(t, err)
+	assert.NotEqual(t, beforeMetadata.Hash, afterMetadata.Hash)
 
 	require.NoError(t, os.Remove(jsonlPath))
 	deletedJSONL, err := provider.SourcesForChangedPath(
