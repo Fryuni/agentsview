@@ -98,6 +98,76 @@ Every provider should include a compile-time assertion:
 var _ Provider = (*CodexProvider)(nil)
 ```
 
+## Embedding Pattern
+
+The intended implementation pattern is explicit embedding. Providers embed
+`ProviderBase` for default optional behavior, then embed or compose source
+helpers for common layouts. The concrete provider implements only the hooks
+where it differs from the defaults.
+
+```go
+type CodexProvider struct {
+	ProviderBase
+
+	Sources SiblingMetadataSourceSet
+}
+
+func NewCodexProvider() *CodexProvider {
+	return &CodexProvider{
+		ProviderBase: ProviderBase{
+			Def:  codexAgentDef(),
+			Caps: codexCapabilities(),
+		},
+		Sources: SiblingMetadataSourceSet{
+			Base: JSONLSourceSet{
+				Extensions: []string{".jsonl"},
+				Recursive: true,
+			},
+			MetadataFiles: []string{CodexSessionIndexFilename},
+		},
+	}
+}
+
+func (p *CodexProvider) Discover(
+	ctx context.Context,
+	roots []string,
+) ([]SourceRef, error) {
+	return p.Sources.Discover(ctx, p.Def.Type, roots)
+}
+
+func (p *CodexProvider) Parse(
+	ctx context.Context,
+	req ParseRequest,
+) (ParseOutcome, error) {
+	sess, msgs, err := ParseCodexSession(
+		req.Source.DisplayPath,
+		req.Machine,
+		false,
+	)
+	if err != nil || sess == nil {
+		return ParseOutcome{}, err
+	}
+	return ParseOutcome{
+		Results: []ParseResult{{Session: *sess, Messages: msgs}},
+	}, nil
+}
+```
+
+For a simple JSONL provider, the provider may embed the source helper directly:
+
+```go
+type QwenProvider struct {
+	ProviderBase
+	DirectoryJSONLSourceSet
+}
+```
+
+The embedded helper can provide `Discover`, `WatchPlan`, `FindSource`, and
+`Fingerprint` behavior when its method signatures match the provider hook shape.
+When a provider needs extra context or adaptation, it keeps the helper as a
+named field and delegates to it. Either way, the provider remains the only
+object registered with the engine.
+
 ## Source References
 
 `SourceRef` is the engine-visible handle for provider-owned source data.
@@ -301,6 +371,11 @@ that contradict unsupported declarations.
 The facade should include helper types for common provider patterns. These
 helpers live below the provider abstraction; the engine still talks only to
 `Provider`.
+
+Helpers should be designed for embedding first. A helper with no provider
+specific state can expose methods that satisfy provider hooks directly when it
+is embedded. Helpers that need provider metadata or extra adaptation should be
+composed as named fields and called by thin provider methods.
 
 ### ProviderBase
 
