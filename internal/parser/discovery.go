@@ -23,6 +23,11 @@ var uuidRe = regexp.MustCompile(
 		`[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$`,
 )
 
+const (
+	copilotStateDir = "session-state"
+	geminiChatsDir  = "chats"
+)
+
 // isDirOrSymlink reports whether the entry is a directory or a
 // symlink that resolves to a directory. parentDir is needed to
 // build the full path for symlink resolution.

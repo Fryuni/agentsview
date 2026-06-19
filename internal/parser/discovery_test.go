@@ -10,11 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	copilotStateDir = "session-state"
-	geminiChatsDir  = "chats"
-)
-
 // setupFileSystem creates a temporary directory and populates
 // it with the given relative file paths and contents.
 func setupFileSystem(t *testing.T, dir string, files map[string]string) {
