@@ -218,7 +218,7 @@ func (p *kiroProvider) parseLegacyJSONL(
 	machine string,
 	fingerprint SourceFingerprint,
 ) (ParseOutcome, error) {
-	if p.sources.legacyPathShadowed(src.Root, src.Path) {
+	if p.sources.legacyPathShadowed(src.Path) {
 		return ParseOutcome{
 			ResultSetComplete: true,
 			SkipReason:        SkipNoSession,
@@ -276,11 +276,11 @@ func newKiroSourceSet(roots []string) kiroSourceSet {
 func (s kiroSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	var sources []SourceRef
 	seen := make(map[string]struct{})
+	currentIDs := s.currentSessionIDs()
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		currentIDs := KiroSQLiteSessionIDs(root)
 		if dbPath := FindKiroSQLiteDBPath(root); dbPath != "" {
 			addJSONLSource(s.newSourceRef(root, dbPath, dbPath, "", kiroSourceSQLiteDB), &sources, seen)
 		}
@@ -399,8 +399,17 @@ func (s kiroSourceSet) Fingerprint(
 	}
 	key := firstNonEmptyJSONLString(source.FingerprintKey, source.Key, src.Path)
 	if src.Kind == kiroSourceSQLiteSession {
+		if _, err := os.Stat(src.DBPath); err != nil {
+			if os.IsNotExist(err) {
+				return SourceFingerprint{Key: key}, nil
+			}
+			return SourceFingerprint{}, fmt.Errorf("stat %s: %w", src.DBPath, err)
+		}
 		row, err := loadKiroSQLiteRow(src.DBPath, src.SessionID)
 		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return SourceFingerprint{Key: key}, nil
+			}
 			return SourceFingerprint{}, err
 		}
 		return SourceFingerprint{
@@ -411,6 +420,9 @@ func (s kiroSourceSet) Fingerprint(
 	}
 	info, err := os.Stat(src.Path)
 	if err != nil {
+		if os.IsNotExist(err) && src.Kind == kiroSourceSQLiteDB {
+			return SourceFingerprint{Key: key}, nil
+		}
 		return SourceFingerprint{}, fmt.Errorf("stat %s: %w", src.Path, err)
 	}
 	if info.IsDir() {
@@ -500,13 +512,28 @@ func (s kiroSourceSet) sourceRefForChangedPath(root, path string) (SourceRef, bo
 	return SourceRef{}, false
 }
 
-func (s kiroSourceSet) legacyPathShadowed(root, path string) bool {
+func (s kiroSourceSet) currentSessionIDs() map[string]struct{} {
+	ids := make(map[string]struct{})
+	for _, root := range s.roots {
+		for id := range KiroSQLiteSessionIDs(root) {
+			ids[id] = struct{}{}
+		}
+	}
+	return ids
+}
+
+func (s kiroSourceSet) legacyPathShadowed(path string) bool {
 	legacyID := KiroSessionIDFromPath(path)
 	if legacyID == "" {
 		return false
 	}
-	dbPath := FindKiroSQLiteDBPath(root)
-	return dbPath != "" && KiroSQLiteSessionExists(dbPath, legacyID)
+	for _, root := range s.roots {
+		dbPath := FindKiroSQLiteDBPath(root)
+		if dbPath != "" && KiroSQLiteSessionExists(dbPath, legacyID) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s kiroSourceSet) newSourceRef(

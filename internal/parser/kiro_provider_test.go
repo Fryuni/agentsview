@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -190,6 +191,146 @@ func TestKiroProviderSkipsShadowedLegacySource(t *testing.T) {
 	assert.Equal(t, KiroSQLiteVirtualPath(dbPath, "shadowed-session"), source.DisplayPath)
 }
 
+func TestKiroProviderShadowsLegacyAcrossAllRoots(t *testing.T) {
+	sqliteRoot := t.TempDir()
+	legacyRoot := t.TempDir()
+	dbPath, db := newKiroProviderSQLiteDBAt(t, sqliteRoot)
+	seedKiroSQLiteSession(
+		t, db, "/home/user/code/current", "shared-session",
+		readKiroFixture(t, "standard_payload.json"),
+		1779012000000, 1779012030000,
+	)
+	legacyPath := filepath.Join(legacyRoot, "legacy-storage.jsonl")
+	writeSourceFile(t, legacyPath, kiroProviderJSONLFixture("Legacy question"))
+	writeSourceFile(t, filepath.Join(legacyRoot, "legacy-storage.json"),
+		kiroProviderMetaFixture("shared-session", "/home/user/code/legacy"))
+
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{
+		Roots: []string{sqliteRoot, legacyRoot},
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, dbPath, discovered[0].DisplayPath)
+
+	legacySource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		StoredFilePath: legacyPath,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: legacySource,
+	})
+	require.NoError(t, err)
+	assert.True(t, outcome.ResultSetComplete)
+	assert.Equal(t, SkipNoSession, outcome.SkipReason)
+	assert.Empty(t, outcome.Results)
+}
+
+func TestKiroProviderFingerprintsSQLiteAndLegacySources(t *testing.T) {
+	root := t.TempDir()
+	payload := readKiroFixture(t, "standard_payload.json")
+	dbPath, db := newKiroProviderSQLiteDBAt(t, root)
+	seedKiroSQLiteSession(
+		t, db, "/home/user/code/kiro-app", "sqlite-session",
+		payload,
+		1779012000000, 1779012030000,
+	)
+	legacyPath := filepath.Join(root, "legacy-session.jsonl")
+	writeSourceFile(t, legacyPath, kiroProviderJSONLFixture("Legacy question"))
+
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	virtualSource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "sqlite-session",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	virtualFingerprint, err := provider.Fingerprint(context.Background(), virtualSource)
+	require.NoError(t, err)
+	assert.Equal(t, KiroSQLiteVirtualPath(dbPath, "sqlite-session"), virtualFingerprint.Key)
+	assert.Equal(t, int64(len(payload)), virtualFingerprint.Size)
+	assert.Equal(t, int64(1779012030000)*1_000_000, virtualFingerprint.MTimeNS)
+
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.NotEmpty(t, sources)
+	sqliteSource := sources[0]
+	require.Equal(t, dbPath, sqliteSource.DisplayPath)
+	beforePhysical, err := provider.Fingerprint(context.Background(), sqliteSource)
+	require.NoError(t, err)
+	walPath := dbPath + "-wal"
+	writeSourceFile(t, walPath, "wal")
+	walTime := time.Unix(0, beforePhysical.MTimeNS+int64(time.Second))
+	require.NoError(t, os.Chtimes(walPath, walTime, walTime))
+	afterPhysical, err := provider.Fingerprint(context.Background(), sqliteSource)
+	require.NoError(t, err)
+	assert.Greater(t, afterPhysical.MTimeNS, beforePhysical.MTimeNS)
+
+	legacySource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		StoredFilePath: legacyPath,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	legacyFingerprint, err := provider.Fingerprint(context.Background(), legacySource)
+	require.NoError(t, err)
+	assert.Equal(t, legacyPath, legacyFingerprint.Key)
+	assert.NotEmpty(t, legacyFingerprint.Hash)
+}
+
+func TestKiroProviderMissingSQLiteSourcesCanReachParse(t *testing.T) {
+	root := t.TempDir()
+	dbPath, db := newKiroProviderSQLiteDBAt(t, root)
+	seedKiroSQLiteSession(
+		t, db, "/home/user/code/kiro-app", "sqlite-session",
+		readKiroFixture(t, "standard_payload.json"),
+		1779012000000, 1779012030000,
+	)
+
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	physicalSource := sources[0]
+	virtualSource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "sqlite-session",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	_, err = db.Exec(`DELETE FROM conversations_v2 WHERE conversation_id = ?`, "sqlite-session")
+	require.NoError(t, err)
+	virtualFingerprint, err := provider.Fingerprint(context.Background(), virtualSource)
+	require.NoError(t, err)
+	assert.Equal(t, virtualSource.FingerprintKey, virtualFingerprint.Key)
+	virtualOutcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:      virtualSource,
+		Fingerprint: virtualFingerprint,
+	})
+	require.NoError(t, err)
+	assert.True(t, virtualOutcome.ResultSetComplete)
+	assert.True(t, virtualOutcome.ForceReplace)
+	assert.Equal(t, SkipNoSession, virtualOutcome.SkipReason)
+
+	require.NoError(t, db.Close())
+	require.NoError(t, os.Remove(dbPath))
+	physicalFingerprint, err := provider.Fingerprint(context.Background(), physicalSource)
+	require.NoError(t, err)
+	assert.Equal(t, physicalSource.FingerprintKey, physicalFingerprint.Key)
+	physicalOutcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:      physicalSource,
+		Fingerprint: physicalFingerprint,
+	})
+	require.NoError(t, err)
+	assert.True(t, physicalOutcome.ResultSetComplete)
+	assert.True(t, physicalOutcome.ForceReplace)
+	assert.Equal(t, SkipNoSession, physicalOutcome.SkipReason)
+}
+
 func TestKiroIDEProviderFactoryReplacesLegacyAdapter(t *testing.T) {
 	factory, ok := ProviderFactoryByType(AgentKiroIDE)
 	require.True(t, ok)
@@ -287,12 +428,33 @@ func TestKiroIDEProviderParsesOldAndNewSources(t *testing.T) {
 	assert.Equal(t, "new-hash", newOutcome.Results[0].Result.Session.File.Hash)
 }
 
+func TestKiroIDEProviderFingerprintsSessionContent(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "workspace-sessions", "encoded-workspace", "new-session.json")
+	writeSourceFile(t, path, kiroIDEProviderNewFixture("New IDE question"))
+
+	provider, ok := NewProvider(AgentKiroIDE, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "new-session",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	before, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+
+	writeSourceFile(t, path, kiroIDEProviderNewFixture("Changed IDE question"))
+	after, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.NotEqual(t, before.Hash, after.Hash)
+}
+
 func newKiroProviderSQLiteDBAt(t *testing.T, root string) (string, *sql.DB) {
 	t.Helper()
 	dbPath := filepath.Join(root, kiroSQLiteDBName)
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "open kiro provider sqlite db")
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	_, err = db.Exec(kiroSQLiteSchema)
 	require.NoError(t, err, "create kiro sqlite schema")
 	return dbPath, db
