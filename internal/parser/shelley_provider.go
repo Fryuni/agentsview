@@ -87,6 +87,13 @@ func (p *shelleyProvider) Parse(
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	dbInfo, err := os.Stat(src.DBPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return ParseOutcome{
+				ResultSetComplete: true,
+				ForceReplace:      true,
+				SkipReason:        SkipNoSession,
+			}, nil
+		}
 		return ParseOutcome{}, fmt.Errorf("stat %s: %w", src.DBPath, err)
 	}
 
@@ -359,7 +366,7 @@ func (s shelleySourceSet) sourceRefForChangedPath(
 		return s.newSourceRef(root, path, dbPath, conversationID), true
 	}
 	dbPath, ok := shelleyDBPathForEvent(root, path)
-	if !ok || !IsRegularFile(dbPath) {
+	if !ok {
 		return SourceRef{}, false
 	}
 	return s.newSourceRef(root, dbPath, dbPath, ""), true

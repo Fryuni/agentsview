@@ -87,6 +87,13 @@ func (p *zedProvider) Parse(
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	dbInfo, err := os.Stat(src.DBPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return ParseOutcome{
+				ResultSetComplete: true,
+				ForceReplace:      true,
+				SkipReason:        SkipNoSession,
+			}, nil
+		}
 		return ParseOutcome{}, fmt.Errorf("stat %s: %w", src.DBPath, err)
 	}
 
@@ -286,6 +293,9 @@ func (s zedSourceSet) Fingerprint(
 	} else if compositeMtime, err := sqliteDBCompositeMtime(src.DBPath); err == nil {
 		mtime = compositeMtime
 	}
+	// Zed has no cheap per-thread content digest; legacy sync stored the
+	// physical DB hash on virtual thread rows while per-thread updated_at
+	// remained the mtime freshness signal.
 	hash, err := hashJSONLSourceFile(src.DBPath)
 	if err != nil {
 		return SourceFingerprint{}, err
@@ -346,7 +356,7 @@ func (s zedSourceSet) sourceRefForChangedPath(root, path string) (SourceRef, boo
 		return s.newSourceRef(root, path, dbPath, sessionID), true
 	}
 	dbPath, ok := zedDBPathForEvent(root, path)
-	if !ok || !IsRegularFile(dbPath) {
+	if !ok {
 		return SourceRef{}, false
 	}
 	return s.newSourceRef(root, dbPath, dbPath, ""), true

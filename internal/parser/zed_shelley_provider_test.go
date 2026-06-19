@@ -177,6 +177,37 @@ func TestZedProviderFingerprintIncludesWALSiblings(t *testing.T) {
 	assert.Greater(t, after.MTimeNS, before.MTimeNS)
 }
 
+func TestZedProviderClassifiesDeletedPhysicalDB(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, zedThreadsDBRelPath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+	createZedThreadsDBAt(t, dbPath, []zedTestThread{{
+		id:        "10431c84-c47b-4e6c-b2df-f9f3b9ad025b",
+		summary:   "Provider thread",
+		updatedAt: "2026-06-08T09:14:10Z",
+		dataType:  "json",
+		data:      []byte(`{"messages":[{"User":{"content":[{"Text":"Hello Zed"}]}}]}`),
+	}})
+	require.NoError(t, os.Remove(dbPath))
+
+	provider, ok := NewProvider(AgentZed, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: dbPath, EventKind: "remove", WatchRoot: filepath.Dir(dbPath)},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, dbPath, changed[0].DisplayPath)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: changed[0]})
+	require.NoError(t, err)
+	assert.True(t, outcome.ResultSetComplete)
+	assert.True(t, outcome.ForceReplace)
+	assert.Equal(t, SkipNoSession, outcome.SkipReason)
+	assert.Empty(t, outcome.Results)
+}
+
 func TestShelleyProviderFactoryReplacesLegacyAdapter(t *testing.T) {
 	factory, ok := ProviderFactoryByType(AgentShelley)
 	require.True(t, ok)
@@ -358,4 +389,27 @@ func TestShelleyProviderClassifiesDeletedVirtualPath(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
 	assert.Equal(t, virtualPath, changed[0].DisplayPath)
+}
+
+func TestShelleyProviderClassifiesDeletedPhysicalDB(t *testing.T) {
+	root, dbPath, db := newShelleyTestDB(t)
+	seedShelleyMainConversation(t, db)
+	require.NoError(t, os.Remove(dbPath))
+
+	provider, ok := NewProvider(AgentShelley, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: dbPath, EventKind: "remove", WatchRoot: root},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, dbPath, changed[0].DisplayPath)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: changed[0]})
+	require.NoError(t, err)
+	assert.True(t, outcome.ResultSetComplete)
+	assert.True(t, outcome.ForceReplace)
+	assert.Equal(t, SkipNoSession, outcome.SkipReason)
+	assert.Empty(t, outcome.Results)
 }
