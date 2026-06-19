@@ -342,6 +342,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 	switch def.Type {
 	case AgentAmp:
 		return newAmpProviderFactory(def)
+	case AgentClaude:
+		return newClaudeProviderFactory(def)
 	case AgentCommandCode:
 		return newCommandCodeProviderFactory(def)
 	case AgentCortex:
