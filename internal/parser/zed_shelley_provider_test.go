@@ -16,6 +16,9 @@ func TestZedProviderFactoryReplacesLegacyAdapter(t *testing.T) {
 	require.True(t, ok)
 	_, legacyFactory := factory.(legacyProviderFactory)
 	assert.False(t, legacyFactory)
+	caps := factory.Capabilities()
+	assert.Equal(t, CapabilityUnsupported, caps.Content.Relationships)
+	assert.Equal(t, CapabilitySupported, caps.Content.AggregateUsageEvents)
 
 	provider, ok := NewProvider(AgentZed, ProviderConfig{
 		Roots:   []string{t.TempDir()},
@@ -213,6 +216,9 @@ func TestShelleyProviderFactoryReplacesLegacyAdapter(t *testing.T) {
 	require.True(t, ok)
 	_, legacyFactory := factory.(legacyProviderFactory)
 	assert.False(t, legacyFactory)
+	caps := factory.Capabilities()
+	assert.Equal(t, CapabilitySupported, caps.Content.Relationships)
+	assert.Equal(t, CapabilityUnsupported, caps.Content.AggregateUsageEvents)
 
 	provider, ok := NewProvider(AgentShelley, ProviderConfig{
 		Roots:   []string{t.TempDir()},

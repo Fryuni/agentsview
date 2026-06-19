@@ -438,7 +438,6 @@ func zedProviderCapabilities() Capabilities {
 			FirstMessage:         CapabilitySupported,
 			SessionName:          CapabilitySupported,
 			Cwd:                  CapabilitySupported,
-			Relationships:        CapabilitySupported,
 			Thinking:             CapabilitySupported,
 			ToolCalls:            CapabilitySupported,
 			ToolResults:          CapabilitySupported,

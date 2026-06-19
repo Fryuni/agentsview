@@ -436,7 +436,6 @@ func shelleyProviderCapabilities() Capabilities {
 			ToolCalls:            CapabilitySupported,
 			ToolResults:          CapabilitySupported,
 			PerMessageTokenUsage: CapabilitySupported,
-			AggregateUsageEvents: CapabilitySupported,
 			Model:                CapabilitySupported,
 		},
 	}
