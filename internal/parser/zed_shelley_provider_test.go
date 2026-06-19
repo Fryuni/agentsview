@@ -211,6 +211,23 @@ func TestZedProviderClassifiesDeletedPhysicalDB(t *testing.T) {
 	assert.Empty(t, outcome.Results)
 }
 
+func TestZedProviderIgnoresUnrelatedSidecarBasename(t *testing.T) {
+	root := t.TempDir()
+	provider, ok := NewProvider(AgentZed, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:      filepath.Join(root, "other", "threads.db-wal"),
+			EventKind: "remove",
+			WatchRoot: filepath.Join(root, "other"),
+		},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, changed)
+}
+
 func TestShelleyProviderFactoryReplacesLegacyAdapter(t *testing.T) {
 	factory, ok := ProviderFactoryByType(AgentShelley)
 	require.True(t, ok)
@@ -418,4 +435,21 @@ func TestShelleyProviderClassifiesDeletedPhysicalDB(t *testing.T) {
 	assert.True(t, outcome.ForceReplace)
 	assert.Equal(t, SkipNoSession, outcome.SkipReason)
 	assert.Empty(t, outcome.Results)
+}
+
+func TestShelleyProviderIgnoresUnrelatedSidecarBasename(t *testing.T) {
+	root := t.TempDir()
+	provider, ok := NewProvider(AgentShelley, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:      filepath.Join(root, "nested", shelleyDBName+"-wal"),
+			EventKind: "remove",
+			WatchRoot: filepath.Join(root, "nested"),
+		},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, changed)
 }

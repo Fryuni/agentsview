@@ -379,8 +379,10 @@ func zedDBPathForEvent(root, path string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if filepath.ToSlash(rel) == "threads/threads.db" ||
-		strings.HasPrefix(filepath.Base(rel), "threads.db-") {
+	relSlash := filepath.ToSlash(rel)
+	if relSlash == "threads/threads.db" ||
+		(filepath.ToSlash(filepath.Dir(rel)) == "threads" &&
+			strings.HasPrefix(filepath.Base(rel), "threads.db-")) {
 		return filepath.Join(root, zedThreadsDBRelPath), true
 	}
 	return "", false

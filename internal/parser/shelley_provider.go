@@ -390,7 +390,8 @@ func shelleyDBPathForEvent(root, path string) (string, bool) {
 		return "", false
 	}
 	if filepath.ToSlash(rel) == shelleyDBName ||
-		strings.HasPrefix(filepath.Base(rel), shelleyDBName+"-") {
+		(filepath.Dir(rel) == "." &&
+			strings.HasPrefix(filepath.Base(rel), shelleyDBName+"-")) {
 		return filepath.Join(root, shelleyDBName), true
 	}
 	return "", false
