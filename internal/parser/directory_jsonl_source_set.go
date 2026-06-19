@@ -31,7 +31,7 @@ func NewDirectoryJSONLSourceSet(
 	}
 	if options.ProjectHint == nil {
 		options.ProjectHint = func(root, path string) string {
-			return filepath.Base(filepath.Dir(path))
+			return directoryJSONLProjectFromPath(path)
 		}
 	}
 	return DirectoryJSONLSourceSet{
@@ -48,4 +48,8 @@ func isDirectoryJSONLPath(root, path string) bool {
 	return len(parts) == 2 &&
 		parts[0] != "" && parts[0] != "." && parts[0] != ".." &&
 		parts[1] != "" && parts[1] != "." && parts[1] != ".."
+}
+
+func directoryJSONLProjectFromPath(path string) string {
+	return filepath.Base(filepath.Dir(path))
 }
