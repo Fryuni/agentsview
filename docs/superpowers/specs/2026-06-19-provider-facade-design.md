@@ -210,8 +210,10 @@ func (p *CodexProvider) Parse(
 		return ParseOutcome{}, err
 	}
 	return ParseOutcome{
-		Results:     []ParseResult{{Session: *sess, Messages: msgs}},
-		DataVersion: DataVersionCurrent,
+		Results: []ParseResultOutcome{{
+			Result:      ParseResult{Session: *sess, Messages: msgs},
+			DataVersion: DataVersionCurrent,
+		}},
 	}, nil
 }
 ```
@@ -294,6 +296,21 @@ Rules:
 - `ProjectHint` is advisory and can be empty.
 - `Opaque` is internal provider state. The engine treats it as an opaque token.
 
+Backwards compatibility:
+
+- Migrated providers should keep `FingerprintKey` compatible with the source key
+  or stored `file_path` values already written by the legacy sync path whenever
+  practical. Existing fingerprint and data-version metadata should continue to
+  short-circuit unchanged sources after the facade migration.
+- If a provider must change its lookup key or fingerprint identity, that
+  provider migration must explicitly document the expected full resync or
+  metadata transition. The facade migration itself must not silently force all
+  providers through a full resync.
+- Diagnostics, parse errors, and logs should surface stable fields such as
+  `Provider`, `Key`, `DisplayPath`, and `FingerprintKey`. `Opaque` is never
+  persisted or logged because it may contain provider-internal implementation
+  details that are not stable across releases.
+
 Watch and changed-path classification use provider-owned root metadata:
 
 ```go
@@ -324,6 +341,12 @@ transcript. `ChangedPathRequest.WatchRoot` is the matched watch root, so the
 provider can classify changes relative to the configured root that produced
 them.
 
+The provider owns the final changed-path decision. The engine may use
+`IncludeGlobs` and `ExcludeGlobs` as coarse prefilters because the provider
+supplied them, but `SourcesForChangedPath` must still tolerate unfiltered events
+and apply authoritative provider-specific classification. Diagnostics should
+report whether the provider accepted, ignored, or rejected a changed path.
+
 `FindSource` replaces the current `FindSourceFunc` fallback model. It must cover
 file-backed and database-backed providers because `FindSourceFile`,
 `SourceMtime`, token usage commands, session watch, and export flows all need
@@ -344,6 +367,18 @@ them through `FindSourceRequest`, but the provider decides whether they are real
 paths, virtual paths, row keys, or obsolete source hints. The engine must not
 `stat`, split, glob, or otherwise interpret a stored path before asking the
 provider to resolve it.
+
+`RequireFreshSource` means the caller needs a source reference the provider has
+verified against current source state. The provider may use stored metadata as a
+hint, but it must confirm the current file, database row, import record, or
+virtual source can still be read or fingerprinted. Filesystem providers usually
+check the current path; database and virtual providers can satisfy this by
+resolving the current logical record. If the source no longer exists, the
+provider returns `(SourceRef{}, false, nil)`. If the source might exist but
+cannot be checked because of an I/O or database failure, it returns an error.
+When `RequireFreshSource` is false, the provider may return the best
+compatibility match for display/export flows that can tolerate stale source
+hints.
 
 ## Fingerprints
 
@@ -371,11 +406,20 @@ The engine uses fingerprints for generic skip/data-version checks and stores the
 same normalized source file metadata it stores today. Hashes remain optional
 where they are expensive or not meaningful.
 
-Fingerprinting must stay cheap enough for the sync hot path. Provider tests
-should cover the expected fingerprint cost for large roots and composite
-sources. A provider that needs a full content hash must document why mtime,
-size, inode/device, or sidecar metadata are insufficient and should avoid
-rehashing unchanged source trees.
+Fingerprinting must stay cheap enough for the sync hot path. Acceptance tests or
+benchmarks should use representative large roots and composite sources with
+concrete pass criteria:
+
+- no full-root content hashing during unchanged sync;
+- no recursive directory walk for every source when discovery already produced
+  the source list;
+- file-backed fingerprints are bounded by the source plus declared sibling
+  metadata files;
+- database fan-out fingerprints reuse database-level metadata plus row/session
+  identifiers instead of scanning unrelated rows;
+- any provider that requires a full content hash documents why mtime, size,
+  inode/device, row metadata, or sidecar metadata are insufficient and includes
+  a benchmark budget for that provider.
 
 ## Parse Requests And Outcomes
 
@@ -388,13 +432,17 @@ type ParseRequest struct {
 }
 
 type ParseOutcome struct {
-	Results            []ParseResult
+	Results            []ParseResultOutcome
 	ExcludedSessionIDs []string
 	SourceErrors       []SourceError
 	ForceReplace       bool
-	DataVersion        DataVersionState
-	RetryReason        string
 	SkipReason         SkipReason
+}
+
+type ParseResultOutcome struct {
+	Result      ParseResult
+	DataVersion DataVersionState
+	RetryReason string
 }
 
 type SourceError struct {
@@ -427,21 +475,26 @@ const (
 Runtime behavior:
 
 - Whole-source parse failures return `error`.
-- Multi-session providers return `SourceErrors` for per-session failures so good
-  sessions can still be ingested.
+- Multi-session providers return one `ParseResultOutcome` per successfully
+  parsed session and `SourceErrors` for per-session failures, so good sessions
+  can still be ingested.
 - `Retryable` decides whether a failure can be cached by mtime.
 - `ForceReplace` is the generic signal for full parses that must rewrite
   existing ordinals.
-- `DataVersionCurrent` means successful results represent the current parser
-  data version for this source.
+- `DataVersionCurrent` means the corresponding successful result represents the
+  current parser data version for that session.
 - `DataVersionNeedsRetry` means successful fallback results may be written, but
-  the source remains eligible for a future parse at the current data version.
+  the session remains eligible for a future parse at the current data version.
   The engine must not persist a current data-version marker or clean skip-cache
-  entry for this source. `RetryReason` records why, for example an
+  entry for that session. `RetryReason` records why, for example an
   Antigravity-style lower-resolution fallback.
 - `DataVersionUnspecified` is allowed only during migration adapters; provider
   harness tests should require new providers to set either `DataVersionCurrent`
-  or `DataVersionNeedsRetry` for non-skipped parses.
+  or `DataVersionNeedsRetry` for every returned result.
+- Mixed data-version states are valid for multi-session sources. One result can
+  be current while another result from the same source needs retry, and a
+  retryable `SourceError` affects only the failed session unless the provider
+  reports a whole-source `error`.
 - `SkipReason` replaces implicit "nil session means skip" behavior. Skips are
   explicit outcomes and should not be conflated with retryable parse failures.
 - Providers do not write to the DB.
@@ -668,7 +721,8 @@ The generic engine flow becomes:
    fields.
 1. Attempt incremental parsing when the provider declares and implements it.
 1. Call provider `Parse` for full parses.
-1. Apply existing normalization and DB write paths to `ParseResult` values.
+1. Apply existing normalization and DB write paths to each
+   `ParseResultOutcome.Result` value.
 1. Persist source metadata, skip cache, excluded IDs, usage events, and parse
    diagnostics using the existing storage model.
 
@@ -736,9 +790,12 @@ The implementation should migrate all providers, grouped by source pattern:
    and source mtime behavior.
 1. Add and migrate non-file import/database providers with acceptance tests for
    `FindSource`, fingerprinting, and unsupported source mechanics.
-1. Move caller surfaces onto providers: full sync, changed-path sync,
-   `SyncSingleSession`, session watch flows, token-usage raw source probing,
-   export/source lookup, source mtime, parse-diff, and parse diagnostics.
+1. Move source-processing callers onto providers: full sync, changed-path sync,
+   and `SyncSingleSession`.
+1. Move lookup/watch callers onto providers: session watch flows, export/source
+   lookup, source mtime, and token-usage raw source probing.
+1. Move diagnostic and comparison callers onto providers: parse-diff and parse
+   diagnostics.
 1. Run a transitional parity phase where old `processFile` and new provider
    dispatch can be compared in tests. The parity assertions must include parsed
    output, excluded IDs, skip-cache decisions, data-version writes, retry-needed
@@ -778,11 +835,14 @@ Required tests:
 - Stored advisory path tests proving `FindSourceRequest.StoredFilePath` is
   interpreted only by the provider.
 - SQLite fan-out source key, virtual path, and per-session error tests.
-- Data-version tests for current, skipped, and retry-needed parse outcomes.
+- Data-version tests for current, skipped, retry-needed, and mixed per-session
+  parse outcomes from one source.
 - Fingerprint performance tests or benchmarks for large roots and composite
-  sources.
+  sources, with the pass criteria from the fingerprint section.
 - Provider harness tests for discovery, fingerprint, parse, source lookup, and
   optional incremental parsing.
+- Parse diagnostic tests proving stable source fields are reported and opaque
+  payloads are not serialized or logged.
 - Migration parity tests comparing provider output to current parser/process
   output during the transition, including skip-cache, data-version writes,
   persisted source metadata, diagnostics, excluded IDs, and retry-needed
@@ -809,7 +869,7 @@ decisions from those structures:
   affected source/session current for the parser data version;
 - non-retryable failure: eligible for skip-cache persistence;
 - full parse fallback from incremental: typed outcome flag;
-- successful lower-resolution fallback: `DataVersionNeedsRetry` plus
+- successful lower-resolution fallback: per-result `DataVersionNeedsRetry` plus
   `RetryReason`;
 - skipped non-session source: explicit `SkipReason`;
 - existing-row rewrite required: `ForceReplace`.
