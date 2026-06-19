@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -68,6 +69,13 @@ func TestPiebaldProviderSourceMethodsAndParse(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
+	forkSource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "42-7",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, source.DisplayPath, forkSource.DisplayPath)
+
 	outcome, err := provider.Parse(context.Background(), ParseRequest{
 		Source: source,
 	})
@@ -117,6 +125,103 @@ func TestWarpProviderSourceMethodsAndParse(t *testing.T) {
 	assert.Equal(t, "warp:conv-001", result.Result.Session.ID)
 	assert.Equal(t, "devbox", result.Result.Session.Machine)
 	assert.NotEmpty(t, result.Result.Messages)
+}
+
+func TestDBBackedProviderFingerprintIgnoresUnrelatedRows(t *testing.T) {
+	dbPath, seeder, db := newForgeTestDB(t)
+	defer db.Close()
+	seedForgeConversation(t, seeder)
+	root := filepath.Dir(dbPath)
+
+	provider, ok := NewProvider(AgentForge, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "conv-001",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	before, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.Equal(t, dbPath+"#conv-001", before.Key)
+	assert.NotZero(t, before.MTimeNS)
+	assert.Zero(t, before.Size)
+	assert.Empty(t, before.Hash)
+
+	seeder.AddConversation(
+		"conv-002",
+		"Unrelated",
+		123,
+		`{"conversation_id":"conv-002","messages":[]}`,
+		"2026-05-03 09:58:15.000000000",
+		"2026-05-03 10:00:16.000000000",
+		"",
+	)
+
+	after, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+}
+
+func TestDBBackedProviderDeletedRowFingerprintsTombstoneAndSkips(t *testing.T) {
+	dbPath, seeder, db := newForgeTestDB(t)
+	defer db.Close()
+	seedForgeConversation(t, seeder)
+	root := filepath.Dir(dbPath)
+
+	provider, ok := NewProvider(AgentForge, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "conv-001",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	_, err = db.Exec(`DELETE FROM conversations WHERE conversation_id = ?`, "conv-001")
+	require.NoError(t, err)
+
+	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.Equal(t, SourceFingerprint{Key: dbPath + "#conv-001"}, fingerprint)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: source,
+	})
+	require.NoError(t, err)
+	assert.True(t, outcome.ResultSetComplete)
+	assert.True(t, outcome.ForceReplace)
+	assert.Equal(t, SkipNoSession, outcome.SkipReason)
+	assert.Empty(t, outcome.Results)
+}
+
+func TestDBBackedProviderMissingDBFingerprintsTombstoneAndSkips(t *testing.T) {
+	dbPath, seeder, db := newForgeTestDB(t)
+	seedForgeConversation(t, seeder)
+	root := filepath.Dir(dbPath)
+	virtualPath := dbPath + "#conv-001"
+
+	provider, ok := NewProvider(AgentForge, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		StoredFilePath: virtualPath,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	require.NoError(t, db.Close())
+	require.NoError(t, os.Remove(dbPath))
+
+	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.Equal(t, SourceFingerprint{Key: virtualPath}, fingerprint)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: source,
+	})
+	require.NoError(t, err)
+	assert.True(t, outcome.ResultSetComplete)
+	assert.True(t, outcome.ForceReplace)
+	assert.Equal(t, SkipNoSession, outcome.SkipReason)
+	assert.Empty(t, outcome.Results)
 }
 
 func assertNotLegacyProvider(t *testing.T, agent AgentType, provider Provider) {
@@ -184,7 +289,7 @@ func assertDBBackedDiscoverFindFingerprint(
 	require.NoError(t, err)
 	assert.Equal(t, virtualPath, fingerprint.Key)
 	assert.NotZero(t, fingerprint.MTimeNS)
-	assert.NotEmpty(t, fingerprint.Hash)
+	assert.Empty(t, fingerprint.Hash)
 }
 
 func seedPiebaldProviderBasicChat(t *testing.T, dbPath string) {

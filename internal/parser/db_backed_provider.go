@@ -296,17 +296,11 @@ func (s dbBackedSourceSet) Fingerprint(
 		return SourceFingerprint{}, fmt.Errorf("%s source path unavailable", s.spec.agent)
 	}
 	key := firstNonEmptyJSONLString(source.FingerprintKey, source.Key, src.virtualPath())
-	info, err := os.Stat(src.DBPath)
-	if err != nil {
+	if _, err := os.Stat(src.DBPath); err != nil {
 		if os.IsNotExist(err) {
 			return SourceFingerprint{Key: key}, nil
 		}
 		return SourceFingerprint{}, fmt.Errorf("stat %s: %w", src.DBPath, err)
-	}
-	fingerprint := SourceFingerprint{
-		Key:     key,
-		Size:    info.Size(),
-		MTimeNS: info.ModTime().UnixNano(),
 	}
 	metas, err := s.spec.listMeta(src.DBPath)
 	if err != nil {
@@ -314,16 +308,13 @@ func (s dbBackedSourceSet) Fingerprint(
 	}
 	for _, meta := range metas {
 		if meta.SessionID == src.SessionID {
-			fingerprint.MTimeNS = meta.FileMtime
-			break
+			return SourceFingerprint{
+				Key:     key,
+				MTimeNS: meta.FileMtime,
+			}, nil
 		}
 	}
-	hash, err := hashJSONLSourceFile(src.DBPath)
-	if err != nil {
-		return SourceFingerprint{}, err
-	}
-	fingerprint.Hash = hash
-	return fingerprint, nil
+	return SourceFingerprint{Key: key}, nil
 }
 
 func (s dbBackedSourceSet) sourceFromRef(source SourceRef) (dbBackedSource, bool) {
