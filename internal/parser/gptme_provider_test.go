@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -80,6 +81,89 @@ func TestGptmeProviderSourceMethods(t *testing.T) {
 	assert.NotZero(t, fingerprint.Size)
 	assert.NotZero(t, fingerprint.MTimeNS)
 	assert.NotEmpty(t, fingerprint.Hash)
+}
+
+func TestGptmeProviderDiscoversSymlinkSessionDirectories(t *testing.T) {
+	root := t.TempDir()
+	targetRoot := t.TempDir()
+	sessionID := "2026-06-13-write-hello-world"
+	targetDir := filepath.Join(targetRoot, sessionID)
+	writeSourceFile(
+		t,
+		filepath.Join(targetDir, "conversation.jsonl"),
+		gptmeProviderFixture(),
+	)
+	linkDir := filepath.Join(root, sessionID)
+	if err := os.Symlink(targetDir, linkDir); err != nil {
+		t.Skipf("creating directory symlink: %v", err)
+	}
+
+	provider, ok := NewProvider(AgentGptme, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, filepath.Join(linkDir, "conversation.jsonl"), discovered[0].DisplayPath)
+
+	legacy := DiscoverGptmeSessions(root)
+	require.Len(t, legacy, 1)
+	assert.Equal(t, legacy[0].Path, discovered[0].DisplayPath)
+}
+
+func TestGptmeProviderClassifiesDeletedConversationPath(t *testing.T) {
+	root := t.TempDir()
+	sessionID := "2026-06-13-write-hello-world"
+	sourcePath := filepath.Join(root, sessionID, "conversation.jsonl")
+	writeSourceFile(t, sourcePath, gptmeProviderFixture())
+
+	provider, ok := NewProvider(AgentGptme, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+	require.NoError(t, os.Remove(sourcePath))
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:      sourcePath,
+			EventKind: "remove",
+			WatchRoot: root,
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, sourcePath, changed[0].Key)
+	assert.Equal(t, sourcePath, changed[0].DisplayPath)
+	assert.Equal(t, "write-hello-world", changed[0].ProjectHint)
+}
+
+func TestGptmeProviderFindSourceUsesPersistedFallbacks(t *testing.T) {
+	root := t.TempDir()
+	sessionID := "2026-06-13-write-hello-world"
+	sourcePath := filepath.Join(root, sessionID, "conversation.jsonl")
+	writeSourceFile(t, sourcePath, gptmeProviderFixture())
+
+	provider, ok := NewProvider(AgentGptme, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	for _, req := range []FindSourceRequest{
+		{FingerprintKey: sourcePath},
+		{FullSessionID: "gptme:" + sessionID},
+		{FullSessionID: "host~gptme:" + sessionID},
+	} {
+		found, ok, err := provider.FindSource(context.Background(), req)
+		require.NoError(t, err)
+		require.Truef(t, ok, "request %#v", req)
+		assert.Equal(t, sourcePath, found.DisplayPath)
+	}
 }
 
 func TestGptmeProviderParse(t *testing.T) {

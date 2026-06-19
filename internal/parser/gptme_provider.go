@@ -61,7 +61,15 @@ func (p *gptmeProvider) SourcesForChangedPath(
 	if err != nil {
 		return nil, err
 	}
-	return p.filterSources(sources), nil
+	filtered := p.filterSources(sources)
+	if len(filtered) > 0 {
+		return filtered, nil
+	}
+	source, ok := p.sourceForEventPath(req)
+	if !ok {
+		return nil, nil
+	}
+	return []SourceRef{source}, nil
 }
 
 func (p *gptmeProvider) FindSource(
@@ -71,23 +79,86 @@ func (p *gptmeProvider) FindSource(
 	if err := ctx.Err(); err != nil {
 		return SourceRef{}, false, err
 	}
-	if req.StoredFilePath != "" {
-		source, ok := p.sources.sourceForPath(req.StoredFilePath)
-		if ok && p.isSource(source) {
+	for _, path := range []string{
+		req.StoredFilePath,
+		req.FingerprintKey,
+	} {
+		if path == "" {
+			continue
+		}
+		if source, ok := p.sourceForExistingPath(path); ok {
 			return source, true, nil
 		}
 	}
-	if req.RawSessionID == "" {
-		return SourceRef{}, false, nil
-	}
-	for _, root := range p.Config.Roots {
-		path := filepath.Join(root, req.RawSessionID, "conversation.jsonl")
-		source, ok := p.sources.sourceForPath(path)
-		if ok && p.isSource(source) {
+	for _, id := range []string{
+		req.RawSessionID,
+		p.rawSessionIDFromFull(req.FullSessionID),
+	} {
+		if id == "" {
+			continue
+		}
+		if source, ok := p.sourceForSessionID(id); ok {
 			return source, true, nil
 		}
 	}
 	return SourceRef{}, false, nil
+}
+
+func (p *gptmeProvider) sourceForExistingPath(path string) (SourceRef, bool) {
+	source, ok := p.sources.sourceForPath(path)
+	if ok && p.isSource(source) {
+		return source, true
+	}
+	return SourceRef{}, false
+}
+
+func (p *gptmeProvider) sourceForSessionID(id string) (SourceRef, bool) {
+	for _, root := range p.Config.Roots {
+		path := filepath.Join(root, id, "conversation.jsonl")
+		if source, ok := p.sourceForExistingPath(path); ok {
+			return source, true
+		}
+	}
+	return SourceRef{}, false
+}
+
+func (p *gptmeProvider) rawSessionIDFromFull(id string) string {
+	if id == "" {
+		return ""
+	}
+	_, rawID := StripHostPrefix(id)
+	if !strings.HasPrefix(rawID, p.Def.IDPrefix) {
+		return ""
+	}
+	return strings.TrimPrefix(rawID, p.Def.IDPrefix)
+}
+
+func (p *gptmeProvider) sourceForEventPath(req ChangedPathRequest) (SourceRef, bool) {
+	if req.Path == "" {
+		return SourceRef{}, false
+	}
+	if req.WatchRoot != "" {
+		root := filepath.Clean(req.WatchRoot)
+		if !p.hasRoot(root) {
+			return SourceRef{}, false
+		}
+		return gptmeSourceRef(root, filepath.Clean(req.Path))
+	}
+	for _, root := range p.Config.Roots {
+		if source, ok := gptmeSourceRef(root, filepath.Clean(req.Path)); ok {
+			return source, true
+		}
+	}
+	return SourceRef{}, false
+}
+
+func (p *gptmeProvider) hasRoot(root string) bool {
+	for _, configured := range p.Config.Roots {
+		if samePath(configured, root) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *gptmeProvider) Fingerprint(
@@ -157,8 +228,9 @@ func (p *gptmeProvider) isSource(source SourceRef) bool {
 
 func newGptmeSourceSet(roots []string) JSONLSourceSet {
 	return NewJSONLSourceSet(AgentGptme, roots, JSONLSourceSetOptions{
-		Recursive: true,
-		Hash:      true,
+		Recursive:         true,
+		Hash:              true,
+		FollowSymlinkDirs: true,
 		Include: func(path string, info os.FileInfo) bool {
 			return !info.IsDir() && filepath.Base(path) == "conversation.jsonl"
 		},
@@ -209,4 +281,25 @@ func gptmeSessionIDFromPath(root, path string) string {
 		return ""
 	}
 	return filepath.Base(filepath.Dir(path))
+}
+
+func gptmeSourceRef(root, path string) (SourceRef, bool) {
+	root = filepath.Clean(root)
+	path = filepath.Clean(path)
+	if !isGptmeConversationPath(root, path) {
+		return SourceRef{}, false
+	}
+	sessionID := gptmeSessionIDFromPath(root, path)
+	return SourceRef{
+		Provider:       AgentGptme,
+		Key:            path,
+		DisplayPath:    path,
+		FingerprintKey: path,
+		ProjectHint:    gptmeProjectFromSessionName(sessionID),
+		Opaque: JSONLSource{
+			Root:    root,
+			Path:    path,
+			RelPath: filepath.Join(sessionID, "conversation.jsonl"),
+		},
+	}, true
 }
