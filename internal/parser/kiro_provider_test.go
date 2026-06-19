@@ -158,7 +158,7 @@ func TestKiroProviderParsePhysicalVirtualAndLegacySources(t *testing.T) {
 
 func TestKiroProviderSkipsShadowedLegacySource(t *testing.T) {
 	root := t.TempDir()
-	_, db := newKiroProviderSQLiteDBAt(t, root)
+	dbPath, db := newKiroProviderSQLiteDBAt(t, root)
 	seedKiroSQLiteSession(
 		t, db, "/home/user/code/shadowed", "shadowed-session",
 		readKiroFixture(t, "standard_payload.json"),
@@ -180,6 +180,14 @@ func TestKiroProviderSkipsShadowedLegacySource(t *testing.T) {
 	assert.True(t, outcome.ResultSetComplete)
 	assert.Equal(t, SkipNoSession, outcome.SkipReason)
 	assert.Empty(t, outcome.Results)
+
+	source, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+		FullSessionID:  "host~kiro:shadowed-session",
+		StoredFilePath: shadowedPath,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, KiroSQLiteVirtualPath(dbPath, "shadowed-session"), source.DisplayPath)
 }
 
 func TestKiroIDEProviderFactoryReplacesLegacyAdapter(t *testing.T) {

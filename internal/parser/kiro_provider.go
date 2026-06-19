@@ -337,6 +337,20 @@ func (s kiroSourceSet) FindSource(
 	if err := ctx.Err(); err != nil {
 		return SourceRef{}, false, err
 	}
+	if req.RawSessionID != "" {
+		for _, root := range s.roots {
+			dbPath := FindKiroSQLiteDBPath(root)
+			if dbPath != "" && KiroSQLiteSessionExists(dbPath, req.RawSessionID) {
+				return s.newSourceRef(
+					root,
+					KiroSQLiteVirtualPath(dbPath, req.RawSessionID),
+					dbPath,
+					req.RawSessionID,
+					kiroSourceSQLiteSession,
+				), true, nil
+			}
+		}
+	}
 	for _, path := range []string{req.StoredFilePath, req.FingerprintKey} {
 		if path == "" {
 			continue
@@ -349,18 +363,6 @@ func (s kiroSourceSet) FindSource(
 	}
 	if req.RawSessionID == "" {
 		return SourceRef{}, false, nil
-	}
-	for _, root := range s.roots {
-		dbPath := FindKiroSQLiteDBPath(root)
-		if dbPath != "" && KiroSQLiteSessionExists(dbPath, req.RawSessionID) {
-			return s.newSourceRef(
-				root,
-				KiroSQLiteVirtualPath(dbPath, req.RawSessionID),
-				dbPath,
-				req.RawSessionID,
-				kiroSourceSQLiteSession,
-			), true, nil
-		}
 	}
 	for _, root := range s.roots {
 		path := FindKiroSourceFile(root, req.RawSessionID)
