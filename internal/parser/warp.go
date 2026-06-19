@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+const warpDBFilename = "warp.sqlite"
+
 // WarpSession bundles a parsed session with its messages.
 type WarpSession struct {
 	Session  ParsedSession
@@ -563,7 +565,7 @@ func parseWarpTimestamp(s string) time.Time {
 // FindWarpDBPath returns the path to warp.sqlite inside the
 // given directory, or "" if it doesn't exist.
 func FindWarpDBPath(dir string) string {
-	candidate := filepath.Join(dir, "warp.sqlite")
+	candidate := filepath.Join(dir, warpDBFilename)
 	if _, err := os.Stat(candidate); err == nil {
 		return candidate
 	}
