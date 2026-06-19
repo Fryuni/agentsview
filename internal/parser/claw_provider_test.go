@@ -181,10 +181,28 @@ func assertClawProviderSourceMethods(t *testing.T, spec clawProviderTestSpec) {
 	require.NoError(t, err)
 	assert.Empty(t, changed)
 
+	require.NoError(t, os.Remove(activePath))
+	changed, err = provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: activePath, EventKind: "remove", WatchRoot: root},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, activeArchivePath, changed[0].DisplayPath)
+
+	require.NoError(t, os.Remove(newArchivePath))
+	changed, err = provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: newArchivePath, EventKind: "remove", WatchRoot: root},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, oldArchivePath, changed[0].DisplayPath)
+
 	changed, err = provider.SourcesForChangedPath(
 		context.Background(),
 		ChangedPathRequest{
-			Path:      newArchivePath,
+			Path:      oldArchivePath,
 			EventKind: "write",
 			WatchRoot: filepath.Join(root, "..", "other-root"),
 		},

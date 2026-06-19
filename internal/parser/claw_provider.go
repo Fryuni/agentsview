@@ -234,7 +234,7 @@ func (s clawSourceSet) SourcesForChangedPath(
 			if !samePath(root, req.WatchRoot) {
 				continue
 			}
-			source, ok := s.sourceForPathInRoot(root, req.Path)
+			source, ok := s.sourceForChangedPathInRoot(root, req)
 			if !ok {
 				return nil, nil
 			}
@@ -242,7 +242,7 @@ func (s clawSourceSet) SourcesForChangedPath(
 		}
 		return nil, nil
 	}
-	source, ok := s.sourceForPath(req.Path)
+	source, ok := s.sourceForChangedPath(req)
 	if !ok {
 		return nil, nil
 	}
@@ -335,23 +335,52 @@ func (s clawSourceSet) sourceForPath(path string) (SourceRef, bool) {
 	return SourceRef{}, false
 }
 
-func (s clawSourceSet) sourceForStoredPath(path string) (SourceRef, bool) {
+func (s clawSourceSet) sourceForChangedPath(req ChangedPathRequest) (SourceRef, bool) {
 	for _, root := range s.roots {
-		root = filepath.Clean(root)
-		path = filepath.Clean(path)
-		rawID, ok := s.rawIDFromPath(root, path)
-		if !ok {
-			continue
-		}
-		best := s.spec.find(root, rawID)
-		if best == "" {
-			continue
-		}
-		if source, ok := s.sourceRef(root, best); ok {
+		if source, ok := s.sourceForChangedPathInRoot(root, req); ok {
 			return source, true
 		}
 	}
 	return SourceRef{}, false
+}
+
+func (s clawSourceSet) sourceForChangedPathInRoot(
+	root string,
+	req ChangedPathRequest,
+) (SourceRef, bool) {
+	if source, ok := s.sourceForPathInRoot(root, req.Path); ok {
+		return source, true
+	}
+	if !jsonlMissingPathFallbackAllowed(req) {
+		return SourceRef{}, false
+	}
+	return s.sourceForStoredPathInRoot(root, req.Path)
+}
+
+func (s clawSourceSet) sourceForStoredPath(path string) (SourceRef, bool) {
+	for _, root := range s.roots {
+		if source, ok := s.sourceForStoredPathInRoot(root, path); ok {
+			return source, true
+		}
+	}
+	return SourceRef{}, false
+}
+
+func (s clawSourceSet) sourceForStoredPathInRoot(
+	root string,
+	path string,
+) (SourceRef, bool) {
+	root = filepath.Clean(root)
+	path = filepath.Clean(path)
+	rawID, ok := s.rawIDFromPath(root, path)
+	if !ok {
+		return SourceRef{}, false
+	}
+	best := s.spec.find(root, rawID)
+	if best == "" {
+		return SourceRef{}, false
+	}
+	return s.sourceRef(root, best)
 }
 
 func (s clawSourceSet) sourceForPathInRoot(root string, path string) (SourceRef, bool) {
