@@ -197,7 +197,7 @@ func (s visualStudioCopilotSourceSet) SourcesForChangedPath(
 		return nil, err
 	}
 	for _, root := range s.roots {
-		source, ok := s.sourceRef(root, req.Path)
+		source, ok := s.sourceRefForChangedPath(root, req.Path)
 		if ok {
 			return []SourceRef{source}, nil
 		}
@@ -291,23 +291,43 @@ func (s visualStudioCopilotSourceSet) sourceRef(root, path string) (SourceRef, b
 	path = filepath.Clean(path)
 	if tracePath, conversationID, ok :=
 		ParseVisualStudioCopilotVirtualPath(path); ok {
-		if !visualStudioCopilotTraceUnderRoot(root, tracePath) {
+		if !visualStudioCopilotTraceUnderRoot(root, tracePath, true) {
 			return SourceRef{}, false
 		}
 		return s.newSourceRef(root, path, tracePath, conversationID), true
 	}
-	if !visualStudioCopilotTraceUnderRoot(root, path) {
+	if !visualStudioCopilotTraceUnderRoot(root, path, true) {
 		return SourceRef{}, false
 	}
 	return s.newSourceRef(root, path, path, ""), true
 }
 
-func visualStudioCopilotTraceUnderRoot(root, path string) bool {
+func (s visualStudioCopilotSourceSet) sourceRefForChangedPath(
+	root, path string,
+) (SourceRef, bool) {
+	if source, ok := s.sourceRef(root, path); ok {
+		return source, true
+	}
+	root = filepath.Clean(root)
+	path = filepath.Clean(path)
+	if !visualStudioCopilotTraceUnderRoot(root, path, false) {
+		return SourceRef{}, false
+	}
+	return s.newSourceRef(root, path, path, ""), true
+}
+
+func visualStudioCopilotTraceUnderRoot(
+	root, path string,
+	requireRegular bool,
+) bool {
 	rel, ok := relUnder(root, path)
 	if !ok || strings.Contains(filepath.ToSlash(rel), "/") {
 		return false
 	}
-	return IsVisualStudioCopilotTraceFile(path) && IsRegularFile(path)
+	if !IsVisualStudioCopilotTraceFile(path) {
+		return false
+	}
+	return !requireRegular || IsRegularFile(path)
 }
 
 func (s visualStudioCopilotSourceSet) newSourceRef(

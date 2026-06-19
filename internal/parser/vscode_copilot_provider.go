@@ -176,7 +176,11 @@ func (s vscodeCopilotSourceSet) SourcesForChangedPath(
 		return nil, err
 	}
 	for _, root := range s.roots {
-		source, ok := s.sourceRef(root, req.Path)
+		sources := s.sourcesForWorkspaceManifest(root, req.Path)
+		if len(sources) > 0 {
+			return sources, nil
+		}
+		source, ok := s.sourceRefForChangedPath(root, req.Path)
 		if ok {
 			return []SourceRef{source}, nil
 		}
@@ -278,7 +282,7 @@ func (s vscodeCopilotSourceSet) sourceRef(root, path string) (SourceRef, bool) {
 		parts[0] == "workspaceStorage" &&
 		parts[2] == "chatSessions" &&
 		isVSCodeCopilotSessionPath(parts[3]) {
-		if promoted := vscodeCopilotJSONLSibling(path); promoted != "" {
+		if promoted := vscodeCopilotPreferredExistingPath(path); promoted != "" {
 			path = promoted
 		}
 		if !IsRegularFile(path) {
@@ -296,7 +300,7 @@ func (s vscodeCopilotSourceSet) sourceRef(root, path string) (SourceRef, bool) {
 		(parts[1] == "emptyWindowChatSessions" ||
 			parts[1] == "transferredChatSessions") &&
 		isVSCodeCopilotSessionPath(parts[2]) {
-		if promoted := vscodeCopilotJSONLSibling(path); promoted != "" {
+		if promoted := vscodeCopilotPreferredExistingPath(path); promoted != "" {
 			path = promoted
 		}
 		if !IsRegularFile(path) {
@@ -305,6 +309,92 @@ func (s vscodeCopilotSourceSet) sourceRef(root, path string) (SourceRef, bool) {
 		return s.newSourceRef(root, path, "empty-window"), true
 	}
 	return SourceRef{}, false
+}
+
+func (s vscodeCopilotSourceSet) sourceRefForChangedPath(
+	root, path string,
+) (SourceRef, bool) {
+	if source, ok := s.sourceRef(root, path); ok {
+		return source, true
+	}
+	return s.syntheticSourceRef(root, path)
+}
+
+func (s vscodeCopilotSourceSet) syntheticSourceRef(
+	root, path string,
+) (SourceRef, bool) {
+	root = filepath.Clean(root)
+	path = filepath.Clean(path)
+	rel, ok := relUnder(root, path)
+	if !ok {
+		return SourceRef{}, false
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) == 4 &&
+		parts[0] == "workspaceStorage" &&
+		parts[2] == "chatSessions" &&
+		isVSCodeCopilotSessionPath(parts[3]) {
+		if promoted := vscodeCopilotPreferredExistingPath(path); promoted != "" {
+			path = promoted
+		}
+		hashDir := filepath.Join(root, "workspaceStorage", parts[1])
+		project := ReadVSCodeWorkspaceManifest(hashDir)
+		if project == "" {
+			project = "unknown"
+		}
+		return s.newSourceRef(root, path, project), true
+	}
+	if len(parts) == 3 &&
+		parts[0] == "globalStorage" &&
+		(parts[1] == "emptyWindowChatSessions" ||
+			parts[1] == "transferredChatSessions") &&
+		isVSCodeCopilotSessionPath(parts[2]) {
+		if promoted := vscodeCopilotPreferredExistingPath(path); promoted != "" {
+			path = promoted
+		}
+		return s.newSourceRef(root, path, "empty-window"), true
+	}
+	return SourceRef{}, false
+}
+
+func (s vscodeCopilotSourceSet) sourcesForWorkspaceManifest(
+	root, path string,
+) []SourceRef {
+	root = filepath.Clean(root)
+	path = filepath.Clean(path)
+	rel, ok := relUnder(root, path)
+	if !ok {
+		return nil
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) != 3 ||
+		parts[0] != "workspaceStorage" ||
+		parts[2] != "workspace.json" {
+		return nil
+	}
+	hashDir := filepath.Join(root, "workspaceStorage", parts[1])
+	chatDir := filepath.Join(hashDir, "chatSessions")
+	entries, err := os.ReadDir(chatDir)
+	if err != nil {
+		return nil
+	}
+	project := ReadVSCodeWorkspaceManifest(hashDir)
+	if project == "" {
+		project = "unknown"
+	}
+	files := discoverVSCodeSessionFiles(chatDir, entries, project)
+	sources := make([]SourceRef, 0, len(files))
+	seen := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		source, ok := s.sourceRef(root, file.Path)
+		if !ok {
+			continue
+		}
+		source.ProjectHint = file.Project
+		addJSONLSource(source, &sources, seen)
+	}
+	sortJSONLSources(sources)
+	return sources
 }
 
 func (s vscodeCopilotSourceSet) newSourceRef(root, path, project string) SourceRef {
@@ -326,14 +416,21 @@ func isVSCodeCopilotSessionPath(name string) bool {
 	return strings.HasSuffix(name, ".json") || strings.HasSuffix(name, ".jsonl")
 }
 
-func vscodeCopilotJSONLSibling(path string) string {
-	base, ok := strings.CutSuffix(path, ".json")
-	if !ok {
-		return ""
+func vscodeCopilotPreferredExistingPath(path string) string {
+	if base, ok := strings.CutSuffix(path, ".json"); ok {
+		candidate := base + ".jsonl"
+		if IsRegularFile(candidate) {
+			return candidate
+		}
 	}
-	candidate := base + ".jsonl"
-	if IsRegularFile(candidate) {
-		return candidate
+	if IsRegularFile(path) {
+		return path
+	}
+	if base, ok := strings.CutSuffix(path, ".jsonl"); ok {
+		candidate := base + ".json"
+		if IsRegularFile(candidate) {
+			return candidate
+		}
 	}
 	return ""
 }
