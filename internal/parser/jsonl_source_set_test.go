@@ -156,6 +156,117 @@ func TestJSONLSourceSetWatchChangedPathFindAndFingerprint(t *testing.T) {
 	assert.Equal(t, fmt.Sprintf("%x", sha256.Sum256([]byte(content))), fingerprint.Hash)
 }
 
+func TestJSONLSourceSetFindSourceUsesFingerprintKey(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "nested", "session-1.jsonl")
+	writeSourceFile(t, path, "{}\n")
+
+	defaultSources := NewJSONLSourceSet(
+		AgentCodex, []string{root}, JSONLSourceSetOptions{Recursive: true},
+	)
+	found, ok, err := defaultSources.FindSource(
+		context.Background(),
+		FindSourceRequest{FingerprintKey: path},
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, path, found.DisplayPath)
+
+	customSources := NewJSONLSourceSet(AgentCodex, []string{root}, JSONLSourceSetOptions{
+		Recursive: true,
+		FingerprintKey: func(root, path string) string {
+			return "fingerprint:" + mustRelSlash(t, root, path)
+		},
+	})
+	found, ok, err = customSources.FindSource(
+		context.Background(),
+		FindSourceRequest{FingerprintKey: "fingerprint:nested/session-1.jsonl"},
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, path, found.DisplayPath)
+	assert.Equal(t, "fingerprint:nested/session-1.jsonl", found.FingerprintKey)
+}
+
+func TestJSONLSourceSetChangedPathClassifiesDeletedFiles(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "nested", "deleted.jsonl")
+	sources := NewJSONLSourceSet(AgentCodex, []string{root}, JSONLSourceSetOptions{
+		Recursive: true,
+	})
+
+	changed, err := sources.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: path, EventKind: "remove", WatchRoot: root},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, path, changed[0].Key)
+	assert.Equal(t, path, changed[0].DisplayPath)
+	assert.Equal(t, path, changed[0].FingerprintKey)
+	assert.Equal(t, "nested/deleted.jsonl", changed[0].Opaque.(JSONLSource).RelPath)
+
+	shallowPath := filepath.Join(root, "nested", "ignored.jsonl")
+	shallowSources := NewJSONLSourceSet(AgentCodex, []string{root}, JSONLSourceSetOptions{})
+	changed, err = shallowSources.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: shallowPath, EventKind: "remove", WatchRoot: root},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, changed)
+}
+
+func TestJSONLSourceSetChangedPathUsesPathOnlyFilterForDeletedFiles(t *testing.T) {
+	root := t.TempDir()
+	sources := NewJSONLSourceSet(AgentCodex, []string{root}, JSONLSourceSetOptions{
+		Recursive: true,
+		IncludePath: func(root, path string) bool {
+			return filepath.Base(path) == "events.jsonl"
+		},
+	})
+
+	ignored, err := sources.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:      filepath.Join(root, "session", "notes.jsonl"),
+			EventKind: "remove",
+			WatchRoot: root,
+		},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, ignored)
+
+	changed, err := sources.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:      filepath.Join(root, "session", "events.jsonl"),
+			EventKind: "remove",
+			WatchRoot: root,
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, filepath.Join(root, "session", "events.jsonl"), changed[0].DisplayPath)
+}
+
+func TestJSONLSourceSetDuplicateKeysKeepFirstConfiguredRoot(t *testing.T) {
+	firstRoot := t.TempDir()
+	secondRoot := t.TempDir()
+	writeSourceFile(t, filepath.Join(firstRoot, "session.jsonl"), "{}\n")
+	writeSourceFile(t, filepath.Join(secondRoot, "session.jsonl"), "{}\n")
+
+	sources := NewJSONLSourceSet(AgentCodex, []string{firstRoot, secondRoot}, JSONLSourceSetOptions{
+		Key: func(_, path string) string {
+			return filepath.Base(path)
+		},
+	})
+
+	discovered, err := sources.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, filepath.Join(firstRoot, "session.jsonl"), discovered[0].DisplayPath)
+}
+
 func TestJSONLSourceSetMissingRootAndInvalidLookupAreNoops(t *testing.T) {
 	root := t.TempDir()
 	sources := NewJSONLSourceSet(AgentCodex, []string{

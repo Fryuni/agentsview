@@ -21,21 +21,51 @@ type JSONLSource struct {
 
 // JSONLSourceSetOptions configures the reusable JSONL source helper.
 type JSONLSourceSetOptions struct {
-	Recursive         bool
-	Extensions        []string
-	Hash              bool
+	// Recursive enables traversal and changed-path classification below each
+	// configured root. When false, only direct child files are sources.
+	Recursive bool
+	// Extensions defaults to .jsonl. Matching is case-sensitive to mirror
+	// legacy parser discovery.
+	Extensions []string
+	// Hash includes a full content hash in SourceFingerprint. Providers should
+	// leave this false unless size/mtime freshness is insufficient.
+	Hash bool
+	// FollowSymlinkDirs treats symlinks to directories as directories while
+	// discovering recursive roots. Providers should enable it only when legacy
+	// discovery followed symlinked session directories; targets may be outside
+	// the configured root, so provider IncludePath filters should constrain the
+	// accepted source shape when that matters.
 	FollowSymlinkDirs bool
-	Include           func(path string, info os.FileInfo) bool
-	Key               func(root, path string) string
-	DisplayPath       func(root, path string) string
-	FingerprintKey    func(root, path string) string
-	ProjectHint       func(root, path string) string
+	// IncludePath is a path-only source predicate. It runs before Include and is
+	// also used for deleted/renamed changed paths where os.FileInfo is
+	// unavailable.
+	IncludePath func(root, path string) bool
+	// Include is a source predicate for existing files. It is not called for
+	// deleted/renamed changed paths.
+	Include func(path string, info os.FileInfo) bool
+	// Key must be stable across process restarts and unique within a provider
+	// when every physical source should be parsed. If duplicates exist,
+	// discovery keeps the first configured root/traversal result.
+	Key func(root, path string) string
+	// DisplayPath is human-readable. When FingerprintKey is not set, it also
+	// becomes the persisted freshness key.
+	DisplayPath func(root, path string) string
+	// FingerprintKey is the persisted lookup and freshness identity. Override it
+	// when DisplayPath is not the stable value that should survive a provider
+	// migration.
+	FingerprintKey func(root, path string) string
+	// ProjectHint is display metadata only.
+	ProjectHint func(root, path string) string
+	// SessionIDFromPath returns the raw session ID used by FindSource fallback
+	// lookups. It should not include the provider ID prefix.
 	SessionIDFromPath func(root, path string) string
 }
 
 // JSONLSourceSet discovers, watches, locates, and fingerprints JSONL-like
 // transcript files. It is a source helper, not a Provider; concrete providers
-// compose it as a named field and forward the methods they support.
+// compose it as a named field and forward the methods they support. Missing or
+// unreadable roots and subdirectories are treated as empty, matching legacy
+// discovery's lenient local-filesystem behavior.
 type JSONLSourceSet struct {
 	provider   AgentType
 	roots      []string
@@ -102,7 +132,10 @@ func (s JSONLSourceSet) SourcesForChangedPath(
 	}
 	source, ok := s.sourceForPath(req.Path)
 	if !ok {
-		return nil, nil
+		source, ok = s.sourceForMissingPath(req.Path)
+		if !ok {
+			return nil, nil
+		}
 	}
 	if req.WatchRoot != "" {
 		root := filepath.Clean(req.WatchRoot)
@@ -127,7 +160,13 @@ func (s JSONLSourceSet) FindSource(
 			return source, true, nil
 		}
 	}
-	if req.RawSessionID == "" || !IsValidSessionID(req.RawSessionID) {
+	if req.FingerprintKey != "" {
+		if source, ok := s.sourceForPath(req.FingerprintKey); ok {
+			return source, true, nil
+		}
+	}
+	validRawID := req.RawSessionID != "" && IsValidSessionID(req.RawSessionID)
+	if req.FingerprintKey == "" && !validRawID {
 		return SourceRef{}, false, nil
 	}
 	sources, err := s.Discover(ctx)
@@ -135,6 +174,12 @@ func (s JSONLSourceSet) FindSource(
 		return SourceRef{}, false, err
 	}
 	for _, source := range sources {
+		if req.FingerprintKey != "" && source.FingerprintKey == req.FingerprintKey {
+			return source, true, nil
+		}
+		if !validRawID {
+			continue
+		}
 		src := source.Opaque.(JSONLSource)
 		if s.sessionID(src.Root, src.Path) == req.RawSessionID {
 			return source, true, nil
@@ -240,7 +285,24 @@ func (s JSONLSourceSet) sourceForPath(path string) (SourceRef, bool) {
 		if !s.pathAllowedByRoot(root, path) {
 			continue
 		}
+		if !s.pathIncluded(root, path) {
+			continue
+		}
 		return s.sourceRef(root, path, info)
+	}
+	return SourceRef{}, false
+}
+
+func (s JSONLSourceSet) sourceForMissingPath(path string) (SourceRef, bool) {
+	path = filepath.Clean(path)
+	for _, root := range s.roots {
+		if !s.pathAllowedByRoot(root, path) {
+			continue
+		}
+		if !s.matchesExtension(path) || !s.pathIncluded(root, path) {
+			continue
+		}
+		return s.sourceRefFromPath(root, path)
 	}
 	return SourceRef{}, false
 }
@@ -260,9 +322,19 @@ func (s JSONLSourceSet) sourceRef(
 	if !s.matchesExtension(path) {
 		return SourceRef{}, false
 	}
+	if !s.pathIncluded(root, path) {
+		return SourceRef{}, false
+	}
 	if s.options.Include != nil && !s.options.Include(path, info) {
 		return SourceRef{}, false
 	}
+	return s.sourceRefFromPath(root, path)
+}
+
+func (s JSONLSourceSet) sourceRefFromPath(
+	root string,
+	path string,
+) (SourceRef, bool) {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
 		return SourceRef{}, false
@@ -291,6 +363,10 @@ func (s JSONLSourceSet) sourceRef(
 			RelPath: rel,
 		},
 	}, true
+}
+
+func (s JSONLSourceSet) pathIncluded(root, path string) bool {
+	return s.options.IncludePath == nil || s.options.IncludePath(root, path)
 }
 
 func (s JSONLSourceSet) matchesExtension(path string) bool {
