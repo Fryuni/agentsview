@@ -354,6 +354,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newAmpProviderFactory(def)
 	case AgentClaude:
 		return newClaudeProviderFactory(def)
+	case AgentClaudeAI:
+		return newImportOnlyProviderFactory(def)
 	case AgentCommandCode:
 		return newCommandCodeProviderFactory(def)
 	case AgentCodex:
@@ -366,6 +368,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newCortexProviderFactory(def)
 	case AgentCursor:
 		return newCursorProviderFactory(def)
+	case AgentChatGPT:
+		return newImportOnlyProviderFactory(def)
 	case AgentDeepSeekTUI:
 		return newDeepSeekTUIProviderFactory(def)
 	case AgentForge:
