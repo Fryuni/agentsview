@@ -295,6 +295,7 @@ agentsview auto-discovers sessions from all of these:
 | OpenClaw              | `~/.openclaw/agents/`                                                                                                                                                   |
 | OpenCode              | `~/.local/share/opencode/`                                                                                                                                              |
 | OpenHands CLI         | `~/.openhands/conversations/`                                                                                                                                           |
+| OhMyPi                | `~/.omp/agent/sessions/`                                                                                                                                                |
 | Pi                    | `~/.pi/agent/sessions/`                                                                                                                                                 |
 | Piebald               | `~/.local/share/piebald/`                                                                                                                                               |
 | Positron Assistant    | `~/Library/Application Support/Positron/User/` (macOS)                                                                                                                  |

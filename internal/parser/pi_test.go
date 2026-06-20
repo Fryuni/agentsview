@@ -3,6 +3,8 @@ package parser
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -53,6 +55,53 @@ func TestParsePiSession_SessionHeader(t *testing.T) {
 	assert.False(t, sess.StartedAt.IsZero(), "PRSR-01: StartedAt non-zero")
 
 	_ = msgs // not the focus of this sub-test
+}
+
+func TestOMPRegistryMetadata(t *testing.T) {
+	def, ok := AgentByType(AgentOMP)
+	require.True(t, ok)
+
+	assert.Equal(t, AgentOMP, def.Type)
+	assert.Equal(t, "OhMyPi", def.DisplayName)
+	assert.Equal(t, "OMP_DIR", def.EnvVar)
+	assert.Equal(t, "omp_dirs", def.ConfigKey)
+	assert.Equal(t, []string{".omp/agent/sessions"}, def.DefaultDirs)
+	assert.Equal(t, "omp:", def.IDPrefix)
+	assert.True(t, def.FileBased)
+	require.NotNil(t, def.DiscoverFunc)
+	require.NotNil(t, def.FindSourceFunc)
+}
+
+func TestParseOMPSession_SessionIdentity(t *testing.T) {
+	fixturePath := createTestFile(
+		t, "omp-test-session-uuid.jsonl",
+		loadFixture(t, "pi/session.jsonl"),
+	)
+	sess, msgs, err := ParseOMPSession(fixturePath, "", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	assert.Equal(t, "omp:pi-test-session-uuid", sess.ID)
+	assert.Equal(t, AgentOMP, sess.Agent)
+	assert.Equal(t, "omp:2025-01-01T09-00-00-000Z_parent-uuid", sess.ParentSessionID)
+	assert.Equal(t, "/Users/alice/code/my-project", sess.Cwd)
+	assert.Equal(t, "my_project", sess.Project)
+	require.NotEmpty(t, msgs)
+}
+
+func TestDiscoverOMPSessions(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "-Users-alice-code-my-project")
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	path := filepath.Join(projectDir, "omp-test-session-uuid.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(loadFixture(t, "pi/session.jsonl")), 0o644))
+
+	files := DiscoverOMPSessions(root)
+	require.Len(t, files, 1)
+	assert.Equal(t, path, files[0].Path)
+	assert.Equal(t, AgentOMP, files[0].Agent)
+	assert.Empty(t, files[0].Project)
+	assert.Equal(t, path, FindOMPSourceFile(root, "omp-test-session-uuid"))
 }
 
 func TestParsePiSession_SessionInfoName(t *testing.T) {

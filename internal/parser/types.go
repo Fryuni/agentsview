@@ -26,6 +26,7 @@ const (
 	AgentVSCodeCopilot  AgentType = "vscode-copilot"
 	AgentVSCopilot      AgentType = "visualstudio-copilot"
 	AgentPi             AgentType = "pi"
+	AgentOMP            AgentType = "omp"
 	AgentQwen           AgentType = "qwen"
 	AgentCommandCode    AgentType = "commandcode"
 	AgentDeepSeekTUI    AgentType = "deepseek-tui"
@@ -319,6 +320,17 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverPiSessions,
 		FindSourceFunc: FindPiSourceFile,
+	},
+	{
+		Type:           AgentOMP,
+		DisplayName:    "OhMyPi",
+		EnvVar:         "OMP_DIR",
+		ConfigKey:      "omp_dirs",
+		DefaultDirs:    []string{".omp/agent/sessions"},
+		IDPrefix:       "omp:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverOMPSessions,
+		FindSourceFunc: FindOMPSourceFile,
 	},
 	{
 		Type:        AgentQwen,

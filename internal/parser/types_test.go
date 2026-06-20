@@ -145,6 +145,7 @@ func TestAgentByType(t *testing.T) {
 		{AgentAmp, true},
 		{AgentVSCodeCopilot, true},
 		{AgentPi, true},
+		{AgentOMP, true},
 		{AgentDeepSeekTUI, true},
 		{"unknown", false},
 	}
@@ -237,6 +238,12 @@ func TestAgentByPrefix(t *testing.T) {
 			true,
 		},
 		{
+			"omp prefix",
+			"omp:omp-session-uuid",
+			AgentOMP,
+			true,
+		},
+		{
 			"zed prefix",
 			"zed:sess-id",
 			AgentZed,
@@ -315,6 +322,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentVSCodeCopilot,
 		AgentVSCopilot,
 		AgentPi,
+		AgentOMP,
 		AgentQwen,
 		AgentCommandCode,
 		AgentDeepSeekTUI,

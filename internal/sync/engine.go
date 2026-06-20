@@ -1101,27 +1101,29 @@ func (e *Engine) classifyOnePath(
 		return df, true
 	}
 
-	// Pi: <piDir>/<encoded-cwd>/<session>.jsonl
-	for _, piDir := range e.agentDirs[parser.AgentPi] {
-		if piDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(piDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) != 2 {
+	// Pi/OMP: <sessionsDir>/<encoded-cwd>/<session>.jsonl
+	for _, agent := range []parser.AgentType{parser.AgentPi, parser.AgentOMP} {
+		for _, piDir := range e.agentDirs[agent] {
+			if piDir == "" {
 				continue
 			}
-			if !strings.HasSuffix(parts[1], ".jsonl") {
-				continue
+			if rel, ok := isUnder(piDir, path); ok {
+				parts := strings.Split(rel, sep)
+				if len(parts) != 2 {
+					continue
+				}
+				if !strings.HasSuffix(parts[1], ".jsonl") {
+					continue
+				}
+				if !parser.IsPiSessionFile(path) {
+					continue
+				}
+				return parser.DiscoveredFile{
+					Path:  path,
+					Agent: agent,
+					// Project left empty; parser derives from header cwd.
+				}, true
 			}
-			if !parser.IsPiSessionFile(path) {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path:  path,
-				Agent: parser.AgentPi,
-				// Project left empty; parser derives from header cwd.
-			}, true
 		}
 	}
 
@@ -2559,7 +2561,7 @@ func (e *Engine) syncAllLocked(
 
 	if verbose {
 		log.Printf(
-			"discovered %d files (%d claude, %d codex, %d copilot, %d gemini, %d cursor, %d amp, %d zencoder, %d iflow, %d vscode-copilot, %d visualstudio-copilot, %d pi, %d kiro, %d zed, %d vibe) in %s",
+			"discovered %d files (%d claude, %d codex, %d copilot, %d gemini, %d cursor, %d amp, %d zencoder, %d iflow, %d vscode-copilot, %d visualstudio-copilot, %d pi, %d omp, %d kiro, %d zed, %d vibe) in %s",
 			len(all),
 			counts[parser.AgentClaude],
 			counts[parser.AgentCodex],
@@ -2572,6 +2574,7 @@ func (e *Engine) syncAllLocked(
 			counts[parser.AgentVSCodeCopilot],
 			counts[parser.AgentVSCopilot],
 			counts[parser.AgentPi],
+			counts[parser.AgentOMP],
 			counts[parser.AgentKiro],
 			counts[parser.AgentZed],
 			counts[parser.AgentVibe],
@@ -4073,7 +4076,7 @@ func (e *Engine) processFile(
 		res = e.processVSCodeCopilot(file, info)
 	case parser.AgentVSCopilot:
 		res = e.processVisualStudioCopilot(file, info)
-	case parser.AgentPi:
+	case parser.AgentPi, parser.AgentOMP:
 		res = e.processPi(file, info)
 	case parser.AgentQwen:
 		res = e.processQwen(file, info)
@@ -6435,9 +6438,16 @@ func (e *Engine) processPi(
 		return processResult{skip: true}
 	}
 
-	sess, msgs, err := parser.ParsePiSession(
-		file.Path, file.Project, e.machine,
+	var (
+		sess *parser.ParsedSession
+		msgs []parser.ParsedMessage
+		err  error
 	)
+	if file.Agent == parser.AgentOMP {
+		sess, msgs, err = parser.ParseOMPSession(file.Path, file.Project, e.machine)
+	} else {
+		sess, msgs, err = parser.ParsePiSession(file.Path, file.Project, e.machine)
+	}
 	if err != nil {
 		return processResult{err: err}
 	}
