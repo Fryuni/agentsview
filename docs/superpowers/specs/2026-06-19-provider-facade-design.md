@@ -402,12 +402,20 @@ type WatchPlan struct {
 	Roots []WatchRoot
 }
 
+type StoredSourcePathHintMode string
+
+const (
+	StoredSourcePathsNone         StoredSourcePathHintMode = ""
+	StoredSourcePathsProviderRoot StoredSourcePathHintMode = "provider-root"
+)
+
 type WatchRoot struct {
-	Path         string
-	Recursive    bool
-	IncludeGlobs []string
-	ExcludeGlobs []string
-	DebounceKey  string
+	Path                  string
+	Recursive             bool
+	IncludeGlobs          []string
+	ExcludeGlobs          []string
+	DebounceKey           string
+	StoredSourcePathHints StoredSourcePathHintMode
 }
 
 type ChangedPathRequest struct {
@@ -426,16 +434,33 @@ transcript. `ChangedPathRequest.WatchRoot` is the matched watch root, so the
 provider can classify changes relative to the configured root that produced
 them.
 
+`StoredSourcePathHints` is zero-valued for providers that do not need persisted
+source-path hints. SQLite fan-out providers that need tombstone recovery declare
+`StoredSourcePathsProviderRoot` on the narrow watch root that owns the shared
+source. That declaration is the engine's only signal to load stored source
+paths; it must not infer the need from provider names, virtual path syntax, or
+capability combinations. A provider must not request stored-source hints from a
+broad recursive root unless the root is already narrow enough for an indexed
+provider/root lookup.
+
 `StoredSourcePaths` contains optional, already-persisted session `file_path`
 values for the matched provider and watch root. It exists for providers that
 model a shared physical source as virtual per-session sources, such as SQLite
-fan-out providers. The engine supplies these paths from the session store during
-the changed-path caller migration; provider-only migration slices may cover the
-behavior with explicit provider tests until that caller exists. Providers use
-the hints only to recover tombstone sources for rows or DB files that can no
-longer be rediscovered from current metadata. The engine must scope collection
-by provider and matched root, and providers must still filter by the concrete
-changed DB/path before returning any source.
+fan-out providers. The engine supplies these paths from a session-store API that
+queries by exact provider plus watched-root path prefix, using an index on
+`(agent, file_path)` or equivalent. The lookup must not scan all sessions, and
+the returned list must be sorted and de-duplicated before it is passed to the
+provider. Provider-only migration slices may cover the behavior with explicit
+provider tests until that caller exists. Providers use the hints only to recover
+tombstone sources for rows or DB files that can no longer be rediscovered from
+current metadata. Providers must still filter by the concrete changed DB/path
+before returning any source.
+
+Persisted source paths are compatibility keys. Providers that request stored
+hints must continue to understand their previously persisted virtual path
+formats, or require a documented full resync for a format change. Malformed or
+obsolete stored paths are ignored for tombstone recovery and reported through
+diagnostics; they must not make the whole changed-path classification fail.
 
 The provider owns the final changed-path decision. The engine may use
 `IncludeGlobs` and `ExcludeGlobs` as coarse prefilters because the provider
@@ -915,8 +940,9 @@ Changed-path live sync becomes:
 
 1. The watcher reports a changed path.
 1. The engine finds providers whose `WatchPlan` roots match the changed path.
-1. The engine loads persisted source paths for the matched provider/root when
-   the provider's source model may need tombstone recovery.
+1. If the matched `WatchRoot` declares `StoredSourcePathHints`, the engine loads
+   persisted source paths through the scoped session-store API for that provider
+   and root.
 1. Each matched provider classifies it through `SourcesForChangedPath` with a
    `ChangedPathRequest` that includes the changed path, event kind, matched
    watch root, and any scoped persisted source paths.
@@ -1174,8 +1200,9 @@ Required tests:
 - Caller migration tests for full sync, changed-path sync, `SyncSingleSession`,
   session watch flows, export/source lookup, token usage raw-source probing,
   source mtime, and parse diagnostics. Changed-path caller tests must include
-  provider/root-scoped `StoredSourcePaths` collection plus DB row deletion and
-  DB file deletion tombstone flows for SQLite fan-out providers.
+  provider/root-scoped `StoredSourcePaths` collection, index-backed lookup with
+  unrelated large tables, malformed stale source-path tolerance, plus DB row
+  deletion and DB file deletion tombstone flows for SQLite fan-out providers.
 - Generated tooling check for `enumer` output.
 - Adding-provider checklist test that fails until registry, capabilities,
   fixtures, source behavior, migration-mode wiring, parity coverage, and docs
