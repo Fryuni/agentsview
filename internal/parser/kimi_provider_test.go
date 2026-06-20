@@ -11,18 +11,15 @@ import (
 )
 
 func TestKimiProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentKimi)
+	_, ok := ProviderFactoryByType(AgentKimi)
 	require.True(t, ok)
-	_, legacyFactory := factory.(legacyProviderFactory)
-	assert.False(t, legacyFactory)
 
 	provider, ok := NewProvider(AgentKimi, ProviderConfig{
 		Roots:   []string{t.TempDir()},
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	_, legacyProvider := provider.(*legacyProvider)
-	assert.False(t, legacyProvider)
+	require.NotNil(t, provider)
 }
 
 func TestKimiProviderSourceMethods(t *testing.T) {
@@ -55,6 +52,7 @@ func TestKimiProviderSourceMethods(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
@@ -122,6 +120,7 @@ func TestKimiProviderDiscoversSymlinkedProjectDirectory(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -146,6 +145,7 @@ func TestKimiProviderParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
@@ -183,6 +183,7 @@ func TestKimiProviderParseNewLayoutRoundTrip(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
 		FullSessionID: "host~kimi:" + rawID,

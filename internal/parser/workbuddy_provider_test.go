@@ -14,8 +14,6 @@ import (
 func TestWorkBuddyProviderFactoryReplacesLegacyAdapter(t *testing.T) {
 	factory, ok := ProviderFactoryByType(AgentWorkBuddy)
 	require.True(t, ok)
-	_, legacyFactory := factory.(legacyProviderFactory)
-	assert.False(t, legacyFactory)
 
 	caps := factory.Capabilities()
 	assert.Equal(t, CapabilitySupported, caps.Source.DiscoverSources)
@@ -38,8 +36,7 @@ func TestWorkBuddyProviderFactoryReplacesLegacyAdapter(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	_, legacyProvider := provider.(*legacyProvider)
-	assert.False(t, legacyProvider)
+	require.NotNil(t, provider)
 }
 
 func TestWorkBuddyProviderSourceMethods(t *testing.T) {
@@ -67,6 +64,7 @@ func TestWorkBuddyProviderSourceMethods(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -150,6 +148,7 @@ func TestWorkBuddyProviderDiscoversSymlinkedProjectDirectory(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -178,6 +177,7 @@ func TestWorkBuddyProviderParseMainAndSubagent(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)

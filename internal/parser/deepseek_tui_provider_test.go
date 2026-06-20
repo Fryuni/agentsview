@@ -11,18 +11,15 @@ import (
 )
 
 func TestDeepSeekTUIProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentDeepSeekTUI)
+	_, ok := ProviderFactoryByType(AgentDeepSeekTUI)
 	require.True(t, ok)
-	_, legacyFactory := factory.(legacyProviderFactory)
-	assert.False(t, legacyFactory)
 
 	provider, ok := NewProvider(AgentDeepSeekTUI, ProviderConfig{
 		Roots:   []string{t.TempDir()},
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	_, legacyProvider := provider.(*legacyProvider)
-	assert.False(t, legacyProvider)
+	require.NotNil(t, provider)
 }
 
 func TestDeepSeekTUIProviderSourceMethods(t *testing.T) {
@@ -38,6 +35,7 @@ func TestDeepSeekTUIProviderSourceMethods(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -84,6 +82,7 @@ func TestDeepSeekTUIProviderSourceMethodsFollowSymlinkedSessionFile(t *testing.T
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -116,6 +115,7 @@ func TestDeepSeekTUIProviderParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)

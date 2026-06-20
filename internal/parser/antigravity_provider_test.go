@@ -13,18 +13,15 @@ import (
 )
 
 func TestAntigravityProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentAntigravity)
+	_, ok := ProviderFactoryByType(AgentAntigravity)
 	require.True(t, ok)
-	_, legacyFactory := factory.(legacyProviderFactory)
-	assert.False(t, legacyFactory)
 
 	provider, ok := NewProvider(AgentAntigravity, ProviderConfig{
 		Roots:   []string{t.TempDir()},
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	_, legacyProvider := provider.(*legacyProvider)
-	assert.False(t, legacyProvider)
+	require.NotNil(t, provider)
 }
 
 func TestAntigravityProviderSourceMethods(t *testing.T) {
@@ -38,6 +35,7 @@ func TestAntigravityProviderSourceMethods(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
@@ -88,6 +86,7 @@ func TestAntigravityProviderFingerprintAndParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
 		RawSessionID: id,
 	})
@@ -124,18 +123,15 @@ func TestAntigravityProviderFingerprintAndParse(t *testing.T) {
 }
 
 func TestAntigravityCLIProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentAntigravityCLI)
+	_, ok := ProviderFactoryByType(AgentAntigravityCLI)
 	require.True(t, ok)
-	_, legacyFactory := factory.(legacyProviderFactory)
-	assert.False(t, legacyFactory)
 
 	provider, ok := NewProvider(AgentAntigravityCLI, ProviderConfig{
 		Roots:   []string{t.TempDir()},
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	_, legacyProvider := provider.(*legacyProvider)
-	assert.False(t, legacyProvider)
+	require.NotNil(t, provider)
 }
 
 func TestAntigravityCLIProviderSourceMethods(t *testing.T) {
@@ -150,6 +146,7 @@ func TestAntigravityCLIProviderSourceMethods(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
@@ -419,6 +416,7 @@ func TestAntigravityCLIProviderFingerprintParseAndRetry(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
 		RawSessionID: id,
 	})

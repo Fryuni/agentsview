@@ -12,18 +12,15 @@ import (
 )
 
 func TestAmpProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentAmp)
+	_, ok := ProviderFactoryByType(AgentAmp)
 	require.True(t, ok)
-	_, legacyFactory := factory.(legacyProviderFactory)
-	assert.False(t, legacyFactory)
 
 	provider, ok := NewProvider(AgentAmp, ProviderConfig{
 		Roots:   []string{t.TempDir()},
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	_, legacyProvider := provider.(*legacyProvider)
-	assert.False(t, legacyProvider)
+	require.NotNil(t, provider)
 }
 
 func TestAmpProviderSourceMethods(t *testing.T) {
@@ -40,6 +37,7 @@ func TestAmpProviderSourceMethods(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -80,6 +78,7 @@ func TestAmpProviderSourceMethodsFollowSymlinkedSessionFile(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -113,6 +112,7 @@ func TestAmpProviderParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
@@ -133,18 +133,15 @@ func TestAmpProviderParse(t *testing.T) {
 }
 
 func TestZencoderProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentZencoder)
+	_, ok := ProviderFactoryByType(AgentZencoder)
 	require.True(t, ok)
-	_, legacyFactory := factory.(legacyProviderFactory)
-	assert.False(t, legacyFactory)
 
 	provider, ok := NewProvider(AgentZencoder, ProviderConfig{
 		Roots:   []string{t.TempDir()},
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	_, legacyProvider := provider.(*legacyProvider)
-	assert.False(t, legacyProvider)
+	require.NotNil(t, provider)
 }
 
 func TestZencoderProviderSourceMethods(t *testing.T) {
@@ -159,6 +156,7 @@ func TestZencoderProviderSourceMethods(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -198,6 +196,7 @@ func TestZencoderProviderSourceMethodsFollowSymlinkedSessionFile(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -230,6 +229,7 @@ func TestZencoderProviderParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)

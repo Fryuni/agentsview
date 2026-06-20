@@ -305,35 +305,6 @@ const (
 	IncrementalNeedsFullParse
 )
 
-type legacyProviderFactory struct {
-	def AgentDef
-}
-
-func (f legacyProviderFactory) Definition() AgentDef {
-	return cloneAgentDef(f.def)
-}
-
-func (f legacyProviderFactory) Capabilities() Capabilities {
-	return Capabilities{}
-}
-
-func (f legacyProviderFactory) NewProvider(cfg ProviderConfig) Provider {
-	return &legacyProvider{
-		ProviderBase: ProviderBase{
-			Def:    cloneAgentDef(f.def),
-			Config: cfg.Clone(),
-		},
-	}
-}
-
-type legacyProvider struct {
-	ProviderBase
-}
-
-func (p *legacyProvider) Parse(context.Context, ParseRequest) (ParseOutcome, error) {
-	return ParseOutcome{}, p.unsupported(ProviderFeatureParse)
-}
-
 // ProviderFactories returns one provider factory for every registered agent.
 func ProviderFactories() []ProviderFactory {
 	factories := make([]ProviderFactory, 0, len(Registry))
@@ -427,7 +398,7 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 	case AgentZed:
 		return newZedProviderFactory(def)
 	default:
-		return legacyProviderFactory{def: def}
+		panic("missing provider factory for " + string(def.Type))
 	}
 }
 

@@ -13,18 +13,15 @@ import (
 )
 
 func TestCoworkProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentCowork)
+	_, ok := ProviderFactoryByType(AgentCowork)
 	require.True(t, ok)
-	_, legacyFactory := factory.(legacyProviderFactory)
-	assert.False(t, legacyFactory)
 
 	provider, ok := NewProvider(AgentCowork, ProviderConfig{
 		Roots:   []string{t.TempDir()},
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	_, legacyProvider := provider.(*legacyProvider)
-	assert.False(t, legacyProvider)
+	require.NotNil(t, provider)
 }
 
 func TestCoworkProviderSourceMethods(t *testing.T) {
@@ -64,6 +61,7 @@ func TestCoworkProviderSourceMethods(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
@@ -182,6 +180,7 @@ func TestCoworkProviderParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
@@ -226,6 +225,7 @@ func TestCoworkProviderFullSessionIDPrefixLookup(t *testing.T) {
 		Roots: []string{root},
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	for _, id := range []string{"cowork:" + cli, "remote~cowork:" + cli} {
 		t.Run(strings.ReplaceAll(id, ":", "_"), func(t *testing.T) {

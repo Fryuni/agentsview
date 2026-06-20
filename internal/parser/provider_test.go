@@ -151,15 +151,24 @@ func TestProviderRegistryMirrorsAgentRegistry(t *testing.T) {
 func TestProviderRegistryHasNoLegacyFallback(t *testing.T) {
 	for _, def := range Registry {
 		factory := providerFactoryForDef(def)
-		_, legacyFactory := factory.(legacyProviderFactory)
-		assert.Falsef(t, legacyFactory, "%s uses legacy provider factory", def.Type)
 		provider := factory.NewProvider(ProviderConfig{
 			Roots:   []string{t.TempDir()},
 			Machine: "devbox",
 		})
-		_, legacyProvider := provider.(*legacyProvider)
-		assert.Falsef(t, legacyProvider, "%s uses legacy provider", def.Type)
+		require.NotNil(t, provider)
 	}
+}
+
+func TestProviderFactoryForDefPanicsForUnhandledAgent(t *testing.T) {
+	assert.PanicsWithValue(t,
+		"missing provider factory for unhandled-test-agent",
+		func() {
+			providerFactoryForDef(AgentDef{
+				Type:        "unhandled-test-agent",
+				DisplayName: "Unhandled Test Agent",
+			})
+		},
+	)
 }
 
 func TestImportOnlyProviderCapabilitiesMatchBaseDefaults(t *testing.T) {
@@ -258,6 +267,7 @@ func TestImportOnlyProviderParseReturnsUnsupported(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	outcome, err := provider.Parse(context.Background(), ParseRequest{
 		Source: SourceRef{

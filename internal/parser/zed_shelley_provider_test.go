@@ -14,8 +14,6 @@ import (
 func TestZedProviderFactoryReplacesLegacyAdapter(t *testing.T) {
 	factory, ok := ProviderFactoryByType(AgentZed)
 	require.True(t, ok)
-	_, legacyFactory := factory.(legacyProviderFactory)
-	assert.False(t, legacyFactory)
 	caps := factory.Capabilities()
 	assert.Equal(t, CapabilityUnsupported, caps.Content.Relationships)
 	assert.Equal(t, CapabilitySupported, caps.Content.AggregateUsageEvents)
@@ -25,8 +23,7 @@ func TestZedProviderFactoryReplacesLegacyAdapter(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	_, legacyProvider := provider.(*legacyProvider)
-	assert.False(t, legacyProvider)
+	require.NotNil(t, provider)
 }
 
 func TestZedProviderSourceMethods(t *testing.T) {
@@ -49,6 +46,7 @@ func TestZedProviderSourceMethods(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
@@ -118,6 +116,7 @@ func TestZedProviderParsePhysicalAndVirtualSources(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
@@ -231,8 +230,6 @@ func TestZedProviderIgnoresUnrelatedSidecarBasename(t *testing.T) {
 func TestShelleyProviderFactoryReplacesLegacyAdapter(t *testing.T) {
 	factory, ok := ProviderFactoryByType(AgentShelley)
 	require.True(t, ok)
-	_, legacyFactory := factory.(legacyProviderFactory)
-	assert.False(t, legacyFactory)
 	caps := factory.Capabilities()
 	assert.Equal(t, CapabilitySupported, caps.Content.Relationships)
 	assert.Equal(t, CapabilityUnsupported, caps.Content.AggregateUsageEvents)
@@ -242,8 +239,7 @@ func TestShelleyProviderFactoryReplacesLegacyAdapter(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	_, legacyProvider := provider.(*legacyProvider)
-	assert.False(t, legacyProvider)
+	require.NotNil(t, provider)
 }
 
 func TestShelleyProviderSourceMethods(t *testing.T) {
@@ -256,6 +252,7 @@ func TestShelleyProviderSourceMethods(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
@@ -312,6 +309,7 @@ func TestShelleyProviderParsePhysicalAndVirtualSources(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)

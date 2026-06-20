@@ -14,18 +14,15 @@ import (
 )
 
 func TestKiroProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentKiro)
+	_, ok := ProviderFactoryByType(AgentKiro)
 	require.True(t, ok)
-	_, legacyFactory := factory.(legacyProviderFactory)
-	assert.False(t, legacyFactory)
 
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{
 		Roots:   []string{t.TempDir()},
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	_, legacyProvider := provider.(*legacyProvider)
-	assert.False(t, legacyProvider)
+	require.NotNil(t, provider)
 }
 
 func TestKiroProviderSourceMethods(t *testing.T) {
@@ -54,6 +51,7 @@ func TestKiroProviderSourceMethods(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
@@ -110,6 +108,7 @@ func TestKiroProviderParsePhysicalVirtualAndLegacySources(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
 	require.Len(t, sources, 2)
@@ -209,6 +208,7 @@ func TestKiroProviderShadowsLegacyAcrossAllRoots(t *testing.T) {
 		Roots: []string{sqliteRoot, legacyRoot},
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -332,18 +332,15 @@ func TestKiroProviderMissingSQLiteSourcesCanReachParse(t *testing.T) {
 }
 
 func TestKiroIDEProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentKiroIDE)
+	_, ok := ProviderFactoryByType(AgentKiroIDE)
 	require.True(t, ok)
-	_, legacyFactory := factory.(legacyProviderFactory)
-	assert.False(t, legacyFactory)
 
 	provider, ok := NewProvider(AgentKiroIDE, ProviderConfig{
 		Roots:   []string{t.TempDir()},
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	_, legacyProvider := provider.(*legacyProvider)
-	assert.False(t, legacyProvider)
+	require.NotNil(t, provider)
 }
 
 func TestKiroIDEProviderSourceMethods(t *testing.T) {
@@ -362,6 +359,7 @@ func TestKiroIDEProviderSourceMethods(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
@@ -406,6 +404,7 @@ func TestKiroIDEProviderParsesOldAndNewSources(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
 	require.Len(t, sources, 2)

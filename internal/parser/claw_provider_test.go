@@ -80,18 +80,15 @@ func qClawProviderTestSpec() clawProviderTestSpec {
 func assertClawProviderReplacesLegacyAdapter(t *testing.T, agent AgentType) {
 	t.Helper()
 
-	factory, ok := ProviderFactoryByType(agent)
+	_, ok := ProviderFactoryByType(agent)
 	require.True(t, ok)
-	_, legacyFactory := factory.(legacyProviderFactory)
-	assert.False(t, legacyFactory)
 
 	provider, ok := NewProvider(agent, ProviderConfig{
 		Roots:   []string{t.TempDir()},
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	_, legacyProvider := provider.(*legacyProvider)
-	assert.False(t, legacyProvider)
+	require.NotNil(t, provider)
 }
 
 func assertClawProviderSourceMethods(t *testing.T, spec clawProviderTestSpec) {
@@ -123,6 +120,7 @@ func assertClawProviderSourceMethods(t *testing.T, spec clawProviderTestSpec) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
@@ -238,6 +236,7 @@ func assertClawProviderDiscoversSymlinkedAgentDirectory(
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -264,6 +263,7 @@ func assertClawProviderParse(t *testing.T, spec clawProviderTestSpec) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)

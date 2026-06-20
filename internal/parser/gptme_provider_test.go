@@ -14,8 +14,6 @@ import (
 func TestGptmeProviderFactoryReplacesLegacyAdapter(t *testing.T) {
 	factory, ok := ProviderFactoryByType(AgentGptme)
 	require.True(t, ok)
-	_, legacyFactory := factory.(legacyProviderFactory)
-	assert.False(t, legacyFactory)
 
 	caps := factory.Capabilities()
 	assert.Equal(t, CapabilitySupported, caps.Source.DiscoverSources)
@@ -33,8 +31,7 @@ func TestGptmeProviderFactoryReplacesLegacyAdapter(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	_, legacyProvider := provider.(*legacyProvider)
-	assert.False(t, legacyProvider)
+	require.NotNil(t, provider)
 }
 
 func TestGptmeProviderSourceMethods(t *testing.T) {
@@ -51,6 +48,7 @@ func TestGptmeProviderSourceMethods(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -103,6 +101,7 @@ func TestGptmeProviderDiscoversSymlinkSessionDirectories(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -125,6 +124,7 @@ func TestGptmeProviderClassifiesDeletedConversationPath(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 	require.NoError(t, os.Remove(sourcePath))
 
 	changed, err := provider.SourcesForChangedPath(
@@ -153,6 +153,7 @@ func TestGptmeProviderFindSourceUsesPersistedFallbacks(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	for _, req := range []FindSourceRequest{
 		{FingerprintKey: sourcePath},
@@ -177,6 +178,7 @@ func TestGptmeProviderParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
 		StoredFilePath: sourcePath,
@@ -215,6 +217,7 @@ func TestGptmeProviderParseMissingSourceIsWholeSourceError(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	outcome, err := provider.Parse(context.Background(), ParseRequest{
 		Source: SourceRef{

@@ -13,8 +13,6 @@ import (
 func TestCortexProviderFactoryReplacesLegacyAdapter(t *testing.T) {
 	factory, ok := ProviderFactoryByType(AgentCortex)
 	require.True(t, ok)
-	_, legacyFactory := factory.(legacyProviderFactory)
-	assert.False(t, legacyFactory)
 
 	caps := factory.Capabilities()
 	assert.Equal(t, CapabilitySupported, caps.Source.DiscoverSources)
@@ -33,8 +31,7 @@ func TestCortexProviderFactoryReplacesLegacyAdapter(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	_, legacyProvider := provider.(*legacyProvider)
-	assert.False(t, legacyProvider)
+	require.NotNil(t, provider)
 }
 
 func TestCortexProviderSourceMethods(t *testing.T) {
@@ -54,6 +51,7 @@ func TestCortexProviderSourceMethods(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -123,6 +121,7 @@ func TestCortexProviderClassifiesAndFingerprintsHistoryCompanion(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	changed, err := provider.SourcesForChangedPath(
 		context.Background(),
@@ -174,6 +173,7 @@ func TestCortexProviderSourceMethodsFollowSymlinkedSessionFile(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -198,6 +198,7 @@ func TestCortexProviderParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
+	require.NotNil(t, provider)
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
