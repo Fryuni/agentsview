@@ -1477,6 +1477,17 @@ func IsPiSessionFile(path string) bool {
 // the directory name. Project is left empty so ParsePiSession
 // can derive it from the header cwd field.
 func DiscoverPiSessions(piDir string) []DiscoveredFile {
+	return discoverPiLikeSessions(piDir, AgentPi)
+}
+
+// DiscoverOMPSessions finds JSONL files under an OhMyPi session root.
+// OMP uses the same layout and file format as Pi, rooted by default at
+// ~/.omp/agent/sessions.
+func DiscoverOMPSessions(ompDir string) []DiscoveredFile {
+	return discoverPiLikeSessions(ompDir, AgentOMP)
+}
+
+func discoverPiLikeSessions(piDir string, agent AgentType) []DiscoveredFile {
 	if piDir == "" {
 		return nil
 	}
@@ -1507,7 +1518,7 @@ func DiscoverPiSessions(piDir string) []DiscoveredFile {
 			}
 			files = append(files, DiscoveredFile{
 				Path:  path,
-				Agent: AgentPi,
+				Agent: agent,
 				// Project intentionally empty; ParsePiSession
 				// derives project from the header cwd field.
 			})
@@ -1523,6 +1534,15 @@ func DiscoverPiSessions(piDir string) []DiscoveredFile {
 // session ID by searching all encoded-cwd subdirectories
 // under piDir for a file named <sessionID>.jsonl.
 func FindPiSourceFile(piDir, sessionID string) string {
+	return findPiLikeSourceFile(piDir, sessionID)
+}
+
+// FindOMPSourceFile finds the original JSONL file for an OMP session ID.
+func FindOMPSourceFile(ompDir, sessionID string) string {
+	return findPiLikeSourceFile(ompDir, sessionID)
+}
+
+func findPiLikeSourceFile(piDir, sessionID string) string {
 	if piDir == "" || !IsValidSessionID(sessionID) {
 		return ""
 	}
