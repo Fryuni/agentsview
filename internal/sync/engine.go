@@ -1495,17 +1495,20 @@ func (e *Engine) classifyVibePath(
 }
 
 // classifyAntigravitySidecarPath maps Antigravity sidecar events --
-// IDE annotations/<id>.pbtxt plus IDE and CLI brain/<id>/* artifacts
-// -- to every session source file that renders them. A CLI storage
-// UUID can hold both a conversation and an implicit session, so one
-// brain event can affect two sources. The sidecar path itself may no
-// longer exist (deletes must reparse the session too), so only the
-// mapped source files are required to exist.
+// IDE annotations/<id>.pbtxt, CLI history.jsonl, plus IDE and CLI
+// brain/<id>/* artifacts -- to every session source file that renders
+// them. A CLI storage UUID can hold both a conversation and an implicit
+// session, so one brain event can affect two sources. The sidecar path
+// itself may no longer exist (deletes must reparse the session too), so
+// only the mapped source files are required to exist.
 func (e *Engine) classifyAntigravitySidecarPath(
 	path string,
 ) []parser.DiscoveredFile {
 	if df, ok := e.classifyAntigravityIDESidecar(path); ok {
 		return []parser.DiscoveredFile{df}
+	}
+	if dfs := e.classifyAntigravityCLIHistoryPath(path); len(dfs) > 0 {
+		return dfs
 	}
 	return e.classifyAntigravityCLIBrainPath(path)
 }
@@ -1546,6 +1549,23 @@ func (e *Engine) classifyAntigravityIDESidecar(
 		}, true
 	}
 	return parser.DiscoveredFile{}, false
+}
+
+func (e *Engine) classifyAntigravityCLIHistoryPath(
+	path string,
+) []parser.DiscoveredFile {
+	path = filepath.Clean(path)
+	for _, agDir := range e.agentDirs[parser.AgentAntigravityCLI] {
+		if agDir == "" {
+			continue
+		}
+		root := filepath.Clean(agDir)
+		if path != filepath.Join(root, "history.jsonl") {
+			continue
+		}
+		return parser.DiscoverAntigravityCLISessions(root)
+	}
+	return nil
 }
 
 func (e *Engine) classifyAntigravityCLIBrainPath(

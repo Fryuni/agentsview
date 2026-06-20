@@ -216,4 +216,20 @@ func TestClassifyOnePath_AntigravityCLI(t *testing.T) {
 			assert.ElementsMatch(t, tt.wantPaths, gotPaths)
 		})
 	}
+
+	t.Run("history file maps to discovered cli sources", func(t *testing.T) {
+		got := eng.classifyPaths([]string{filepath.Join(dir, "history.jsonl")})
+		var gotPaths []string
+		for _, df := range got {
+			assert.Equal(t, parser.AgentAntigravityCLI, df.Agent)
+			gotPaths = append(gotPaths, df.Path)
+		}
+		assert.ElementsMatch(t, []string{
+			pbPath,
+			dbPath,
+			bothDBPath,
+			implPbPath,
+			implOnlyPbPath,
+		}, gotPaths)
+	})
 }

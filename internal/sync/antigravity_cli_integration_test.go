@@ -573,6 +573,40 @@ func TestSyncSingleSessionAntigravityCLI_InferredProjectWithoutConversationID(t 
 	assertSessionMessageCount(t, env.db, sessionID, 1)
 }
 
+func TestSyncPathsAntigravityCLIHistoryOnlyUpdateRefreshesProject(t *testing.T) {
+	env := setupTestEnv(t)
+	uuid := "de45fa67-8888-9999-aaaa-bbbbccccdddd"
+	sessionID := "antigravity-cli:" + uuid
+	early := time.UnixMilli(1716244800000)
+	late := early.Add(time.Minute)
+
+	convDir := filepath.Join(env.antigravityCLIDir, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o755))
+	dbPath := filepath.Join(convDir, uuid+".db")
+	createAntigravityCLIDisplayStepDB(t, dbPath, "History arrives later")
+	require.NoError(t, os.Chtimes(dbPath, early, early))
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+	assertSessionProject(t, env.db, sessionID, "")
+
+	historyPath := filepath.Join(env.antigravityCLIDir, "history.jsonl")
+	historyLine := fmt.Sprintf(
+		`{"conversationId": %q, "workspace": "/home/user/history-arrived", "timestamp": %d, "display": "History arrives later"}`+"\n",
+		uuid, late.UnixMilli(),
+	)
+	require.NoError(t, os.WriteFile(historyPath, []byte(historyLine), 0o644))
+	require.NoError(t, os.Chtimes(historyPath, late, late))
+
+	env.engine.SyncPaths([]string{historyPath})
+
+	assertSessionProject(t, env.db, sessionID, "/home/user/history-arrived")
+	assertSessionMessageCount(t, env.db, sessionID, 1)
+}
+
 func TestSyncEngineAntigravityCLI_MissingPbOrphanSidecar(t *testing.T) {
 	env := setupTestEnv(t)
 	uuid := "66666666-7777-8888-9999-000000000000"
