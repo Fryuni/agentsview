@@ -411,9 +411,10 @@ type WatchRoot struct {
 }
 
 type ChangedPathRequest struct {
-	Path      string
-	EventKind string
-	WatchRoot string
+	Path              string
+	EventKind         string
+	WatchRoot         string
+	StoredSourcePaths []string
 }
 ```
 
@@ -424,6 +425,17 @@ file. `DebounceKey` groups related paths such as sibling metadata files and a
 transcript. `ChangedPathRequest.WatchRoot` is the matched watch root, so the
 provider can classify changes relative to the configured root that produced
 them.
+
+`StoredSourcePaths` contains optional, already-persisted session `file_path`
+values for the matched provider and watch root. It exists for providers that
+model a shared physical source as virtual per-session sources, such as SQLite
+fan-out providers. The engine supplies these paths from the session store during
+the changed-path caller migration; provider-only migration slices may cover the
+behavior with explicit provider tests until that caller exists. Providers use
+the hints only to recover tombstone sources for rows or DB files that can no
+longer be rediscovered from current metadata. The engine must scope collection
+by provider and matched root, and providers must still filter by the concrete
+changed DB/path before returning any source.
 
 The provider owns the final changed-path decision. The engine may use
 `IncludeGlobs` and `ExcludeGlobs` as coarse prefilters because the provider
@@ -840,7 +852,10 @@ metadata/title/index files.
 
 Creates one or many `SourceRef` values from a shared SQLite source while keeping
 table and row details provider-owned. It supports providers where one database
-file represents many logical sessions.
+file represents many logical sessions. SQLite fan-out providers must define
+their deletion contract explicitly: live metadata produces normal virtual
+sources, while persisted source-path hints allow row or DB deletion events to
+emit tombstone sources that parse as `SkipNoSession`.
 
 ### VirtualPath Helpers
 
@@ -900,9 +915,11 @@ Changed-path live sync becomes:
 
 1. The watcher reports a changed path.
 1. The engine finds providers whose `WatchPlan` roots match the changed path.
+1. The engine loads persisted source paths for the matched provider/root when
+   the provider's source model may need tombstone recovery.
 1. Each matched provider classifies it through `SourcesForChangedPath` with a
-   `ChangedPathRequest` that includes the changed path, event kind, and matched
-   watch root.
+   `ChangedPathRequest` that includes the changed path, event kind, matched
+   watch root, and any scoped persisted source paths.
 1. The engine processes the returned `SourceRef` values generically.
 
 Source lookup becomes:
@@ -1156,7 +1173,9 @@ Required tests:
   virtual paths, and title/metadata refreshes.
 - Caller migration tests for full sync, changed-path sync, `SyncSingleSession`,
   session watch flows, export/source lookup, token usage raw-source probing,
-  source mtime, and parse diagnostics.
+  source mtime, and parse diagnostics. Changed-path caller tests must include
+  provider/root-scoped `StoredSourcePaths` collection plus DB row deletion and
+  DB file deletion tombstone flows for SQLite fan-out providers.
 - Generated tooling check for `enumer` output.
 - Adding-provider checklist test that fails until registry, capabilities,
   fixtures, source behavior, migration-mode wiring, parity coverage, and docs
