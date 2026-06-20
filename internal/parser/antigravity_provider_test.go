@@ -217,6 +217,21 @@ func TestAntigravityCLIProviderSourceMethods(t *testing.T) {
 	require.Len(t, changed, 2)
 	assert.Equal(t, dbPath, changed[0].DisplayPath)
 	assert.Equal(t, implicitPath, changed[1].DisplayPath)
+
+	otherID := "88888888-9999-aaaa-bbbb-cccccccccccc"
+	mustWrite(t, filepath.Join(root, "conversations", otherID+".db"), []byte("db"))
+	changed, err = provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:      filepath.Join(root, "history.jsonl"),
+			WatchRoot: root,
+			EventKind: "write",
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 2)
+	assert.Equal(t, dbPath, changed[0].DisplayPath)
+	assert.Equal(t, implicitPath, changed[1].DisplayPath)
 }
 
 func TestAntigravityCLIProviderFingerprintParseAndRetry(t *testing.T) {
@@ -362,17 +377,33 @@ func TestAntigravityCLIProviderFingerprintTracksSideInputs(t *testing.T) {
 	before, err := provider.Fingerprint(context.Background(), source)
 	require.NoError(t, err)
 
-	mustWrite(t, filepath.Join(root, "history.jsonl"),
-		[]byte(`{"display":"changed prompt","timestamp":1779000000000,`+
-			`"workspace":"/tmp/db-proj","conversationId":"`+id+`"}`))
+	relevantHistory := `{"display":"changed prompt","timestamp":1779000000000,` +
+		`"workspace":"/tmp/db-proj","conversationId":"` + id + `"}`
+	mustWrite(t, filepath.Join(root, "history.jsonl"), []byte(relevantHistory))
 	afterHistory, err := provider.Fingerprint(context.Background(), source)
 	require.NoError(t, err)
 	assert.NotEqual(t, before.Hash, afterHistory.Hash)
 
+	unrelatedHistory := relevantHistory + "\n" +
+		`{"display":"other prompt","timestamp":1779000000000,` +
+		`"workspace":"/tmp/other","conversationId":"88888888-9999-aaaa-bbbb-cccccccccccc"}`
+	mustWrite(t, filepath.Join(root, "history.jsonl"), []byte(unrelatedHistory))
+	afterUnrelatedHistory, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.Equal(t, afterHistory.Hash, afterUnrelatedHistory.Hash)
+
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(unrelatedHistory+"\n"+
+			`{"display":"untagged prompt","timestamp":1779000000000,`+
+			`"workspace":"/tmp/fallback"}`))
+	afterUntaggedHistory, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.NotEqual(t, afterUnrelatedHistory.Hash, afterUntaggedHistory.Hash)
+
 	mustWrite(t, filepath.Join(root, "brain", id, "task.md"), []byte("# Changed"))
 	afterBrain, err := provider.Fingerprint(context.Background(), source)
 	require.NoError(t, err)
-	assert.NotEqual(t, afterHistory.Hash, afterBrain.Hash)
+	assert.NotEqual(t, afterUntaggedHistory.Hash, afterBrain.Hash)
 
 	writeAntigravityTestSidecar(t, root, id, 3)
 	afterSidecar, err := provider.Fingerprint(context.Background(), source)

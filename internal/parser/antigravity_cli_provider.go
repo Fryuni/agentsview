@@ -1,11 +1,14 @@
 package parser
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/tidwall/gjson"
 )
 
 var _ Provider = (*antigravityCLIProvider)(nil)
@@ -276,10 +279,7 @@ func (s antigravityCLISourceSet) Fingerprint(
 		}
 		return SourceFingerprint{}, err
 	}
-	hash, err := antigravityCompositeHash(
-		src.Path,
-		antigravityCLICompanionPaths(src.Path)...,
-	)
+	hash, err := antigravityCLICompositeHash(src.Path, src.ID)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -347,6 +347,39 @@ func (s antigravityCLISourceSet) sourcesForChangedPath(
 }
 
 func (s antigravityCLISourceSet) sourcesForHistoryChange(root string) []SourceRef {
+	ids, hasUntaggedRows := antigravityCLIHistorySourceIDs(
+		filepath.Join(root, "history.jsonl"),
+	)
+	if hasUntaggedRows {
+		return s.sourcesForUntaggedHistoryChange(root)
+	}
+
+	var sources []SourceRef
+	seen := make(map[string]struct{})
+	for id := range ids {
+		if !IsValidSessionID(id) {
+			continue
+		}
+		project := s.projectForID(root, id)
+		if sourcePath := antigravityCLIConversationSource(root, id); sourcePath != "" {
+			source, ok := s.sourceRef(root, sourcePath, project, false)
+			if ok {
+				addJSONLSource(source, &sources, seen)
+			}
+		}
+		implicitPath := filepath.Join(root, "implicit", id+".pb")
+		if IsRegularFile(implicitPath) {
+			source, ok := s.sourceRef(root, implicitPath, project, false)
+			if ok {
+				addJSONLSource(source, &sources, seen)
+			}
+		}
+	}
+	sortJSONLSources(sources)
+	return sources
+}
+
+func (s antigravityCLISourceSet) sourcesForUntaggedHistoryChange(root string) []SourceRef {
 	var sources []SourceRef
 	seen := make(map[string]struct{})
 	for _, file := range DiscoverAntigravityCLISessions(root) {
@@ -357,6 +390,34 @@ func (s antigravityCLISourceSet) sourcesForHistoryChange(root string) []SourceRe
 	}
 	sortJSONLSources(sources)
 	return sources
+}
+
+func antigravityCLIHistorySourceIDs(historyPath string) (map[string]struct{}, bool) {
+	ids := make(map[string]struct{})
+	f, err := os.Open(historyPath)
+	if err != nil {
+		return ids, false
+	}
+	defer f.Close()
+
+	var hasUntaggedRows bool
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		cid := gjson.GetBytes(line, "conversationId").Str
+		if cid == "" {
+			hasUntaggedRows = true
+			continue
+		}
+		if IsValidSessionID(cid) {
+			ids[cid] = struct{}{}
+		}
+	}
+	return ids, hasUntaggedRows
 }
 
 func (s antigravityCLISourceSet) storedSourceRef(

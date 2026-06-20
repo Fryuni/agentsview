@@ -759,7 +759,9 @@ func decryptAntigravityCLITranscript(
 // AntigravityCLIFileInfo returns a fake os.FileInfo whose size and
 // mtime combine the session file with everything else the parser
 // renders: SQLite WAL/SHM siblings, the .trajectory.json sidecar,
-// history.jsonl fallback rows, and the brain/<id> artifacts.
+// and the brain/<id> artifacts. History rows are included in provider
+// fingerprints separately because tagged rows are per-session, while
+// untagged fallback rows have a broader matching contract.
 func AntigravityCLIFileInfo(path string) (os.FileInfo, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -773,7 +775,6 @@ func AntigravityCLIFileInfo(path string) (os.FileInfo, error) {
 
 func antigravityCLICompanionPaths(path string) []string {
 	root := filepath.Dir(filepath.Dir(path))
-	historyPath := filepath.Join(root, "history.jsonl")
 	if base, ok := strings.CutSuffix(path, ".db"); ok {
 		// The trajectory sidecar is a transcript source for .db sessions
 		// too, so an agy-reader sync must change the fingerprint even when
@@ -782,7 +783,6 @@ func antigravityCLICompanionPaths(path string) []string {
 			path + "-wal",
 			path + "-shm",
 			base + ".trajectory.json",
-			historyPath,
 		}
 		return append(companions, antigravityBrainCompanions(
 			filepath.Join(root, "brain", filepath.Base(base)),
@@ -792,7 +792,6 @@ func antigravityCLICompanionPaths(path string) []string {
 	id := strings.TrimSuffix(filepath.Base(path), ".pb")
 	companions := []string{
 		strings.TrimSuffix(path, ".pb") + ".trajectory.json",
-		historyPath,
 	}
 	return append(companions, antigravityBrainCompanions(
 		filepath.Join(root, "brain", id),
@@ -846,6 +845,14 @@ func antigravityCLICombinedFileInfo(
 }
 
 func antigravityCompositeHash(path string, companions ...string) (string, error) {
+	return antigravityCompositeHashWithExtra(path, companions, nil)
+}
+
+func antigravityCompositeHashWithExtra(
+	path string,
+	companions []string,
+	extra func(interface{ Write([]byte) (int, error) }) error,
+) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return "", fmt.Errorf("stat %s: %w", path, err)
@@ -879,7 +886,73 @@ func antigravityCompositeHash(path string, companions ...string) (string, error)
 			continue
 		}
 	}
+	if extra != nil {
+		if err := extra(h); err != nil {
+			return "", err
+		}
+	}
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+func antigravityCLICompositeHash(path, id string) (string, error) {
+	return antigravityCompositeHashWithExtra(
+		path,
+		antigravityCLICompanionPaths(path),
+		func(h interface{ Write([]byte) (int, error) }) error {
+			return addAntigravityCLIHistoryFingerprintPart(
+				h,
+				filepath.Join(filepath.Dir(filepath.Dir(path)), "history.jsonl"),
+				strings.TrimPrefix(id, antigravityImplicitTag),
+			)
+		},
+	)
+}
+
+func addAntigravityCLIHistoryFingerprintPart(
+	h interface{ Write([]byte) (int, error) },
+	historyPath string,
+	id string,
+) error {
+	f, err := os.Open(historyPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("open %s: %w", historyPath, err)
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		cid := gjson.GetBytes(line, "conversationId").Str
+		if cid != "" && cid != id {
+			continue
+		}
+		label := "history"
+		if cid == "" {
+			// Untagged rows are used by the project fallback matcher, whose
+			// source cannot be known from the row alone.
+			label = "history-untagged"
+		}
+		if _, err := fmt.Fprintf(h, "%s\x00%d\x00", label, len(line)); err != nil {
+			return err
+		}
+		if _, err := h.Write(line); err != nil {
+			return err
+		}
+		if _, err := h.Write([]byte{0}); err != nil {
+			return err
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return fmt.Errorf("scan %s: %w", historyPath, err)
+	}
+	return nil
 }
 
 func addAntigravityFingerprintPart(
