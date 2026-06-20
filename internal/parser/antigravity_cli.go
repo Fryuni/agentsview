@@ -759,9 +759,9 @@ func decryptAntigravityCLITranscript(
 // AntigravityCLIFileInfo returns a fake os.FileInfo whose size and
 // mtime combine the session file with everything else the parser
 // renders: SQLite WAL/SHM siblings, the .trajectory.json sidecar,
-// and the brain/<id> artifacts. History rows are included in provider
-// fingerprints separately because tagged rows are per-session, while
-// untagged fallback rows have a broader matching contract.
+// history.jsonl, and the brain/<id> artifacts. History stays here while
+// legacy sync skip checks use this effective file info; provider hashes
+// additionally scope tagged history rows by conversation ID.
 func AntigravityCLIFileInfo(path string) (os.FileInfo, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -775,11 +775,13 @@ func AntigravityCLIFileInfo(path string) (os.FileInfo, error) {
 
 func antigravityCLICompanionPaths(path string) []string {
 	root := filepath.Dir(filepath.Dir(path))
+	historyPath := filepath.Join(root, "history.jsonl")
 	if base, ok := strings.CutSuffix(path, ".db"); ok {
 		// The trajectory sidecar is a transcript source for .db sessions
 		// too, so an agy-reader sync must change the fingerprint even when
 		// the database files themselves are untouched.
 		companions := []string{
+			historyPath,
 			path + "-wal",
 			path + "-shm",
 			base + ".trajectory.json",
@@ -791,6 +793,7 @@ func antigravityCLICompanionPaths(path string) []string {
 
 	id := strings.TrimSuffix(filepath.Base(path), ".pb")
 	companions := []string{
+		historyPath,
 		strings.TrimSuffix(path, ".pb") + ".trajectory.json",
 	}
 	return append(companions, antigravityBrainCompanions(
@@ -897,7 +900,7 @@ func antigravityCompositeHashWithExtra(
 func antigravityCLICompositeHash(path, id string) (string, error) {
 	return antigravityCompositeHashWithExtra(
 		path,
-		antigravityCLICompanionPaths(path),
+		antigravityCLIProviderCompanionPaths(path),
 		func(h interface{ Write([]byte) (int, error) }) error {
 			return addAntigravityCLIHistoryFingerprintPart(
 				h,
@@ -906,6 +909,19 @@ func antigravityCLICompositeHash(path, id string) (string, error) {
 			)
 		},
 	)
+}
+
+func antigravityCLIProviderCompanionPaths(path string) []string {
+	historyPath := filepath.Join(filepath.Dir(filepath.Dir(path)), "history.jsonl")
+	companions := antigravityCLICompanionPaths(path)
+	filtered := companions[:0]
+	for _, companion := range companions {
+		if samePath(companion, historyPath) {
+			continue
+		}
+		filtered = append(filtered, companion)
+	}
+	return filtered
 }
 
 func addAntigravityCLIHistoryFingerprintPart(

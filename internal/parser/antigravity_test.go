@@ -453,6 +453,47 @@ func TestAntigravityCLIDBFileInfoIncludesSQLiteSidecars(t *testing.T) {
 	assert.Equal(t, late.UnixNano(), info.ModTime().UnixNano())
 }
 
+func TestAntigravityCLIFileInfoIncludesHistoryForLegacySync(t *testing.T) {
+	early := time.Unix(1779000000, 0)
+	late := time.Unix(1779000300, 0)
+	history := []byte(`{"display":"history prompt","timestamp":1779000000000,` +
+		`"workspace":"/tmp/proj","conversationId":"id"}` + "\n")
+
+	t.Run("db session", func(t *testing.T) {
+		root := t.TempDir()
+		id := "14141414-2525-3636-4747-585858585858"
+		mustMkdir(t, filepath.Join(root, "conversations"))
+		dbPath := filepath.Join(root, "conversations", id+".db")
+		historyPath := filepath.Join(root, "history.jsonl")
+		mustWrite(t, dbPath, []byte("db"))
+		mustWrite(t, historyPath, history)
+		require.NoError(t, os.Chtimes(dbPath, early, early))
+		require.NoError(t, os.Chtimes(historyPath, late, late))
+
+		info, err := AntigravityCLIFileInfo(dbPath)
+		require.NoError(t, err)
+		assert.Equal(t, int64(len("db")+len(history)), info.Size())
+		assert.Equal(t, late.UnixNano(), info.ModTime().UnixNano())
+	})
+
+	t.Run("pb session", func(t *testing.T) {
+		root := t.TempDir()
+		id := "15151515-2626-3737-4848-595959595959"
+		mustMkdir(t, filepath.Join(root, "implicit"))
+		pbPath := filepath.Join(root, "implicit", id+".pb")
+		historyPath := filepath.Join(root, "history.jsonl")
+		mustWrite(t, pbPath, []byte("pb"))
+		mustWrite(t, historyPath, history)
+		require.NoError(t, os.Chtimes(pbPath, early, early))
+		require.NoError(t, os.Chtimes(historyPath, late, late))
+
+		info, err := AntigravityCLIFileInfo(pbPath)
+		require.NoError(t, err)
+		assert.Equal(t, int64(len("pb")+len(history)), info.Size())
+		assert.Equal(t, late.UnixNano(), info.ModTime().UnixNano())
+	})
+}
+
 // TestAntigravityCLIFileInfoIncludesBrainArtifacts pins brain
 // artifacts into the CLI composite fingerprint: the parser renders
 // brain/<id>/*.md (+ .metadata.json) as messages, so a brain-only
