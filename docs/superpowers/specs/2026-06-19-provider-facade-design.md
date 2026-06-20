@@ -456,11 +456,28 @@ tombstone sources for rows or DB files that can no longer be rediscovered from
 current metadata. Providers must still filter by the concrete changed DB/path
 before returning any source.
 
+For this lookup, the provider key is the persisted `sessions.agent` value and
+must equal `string(SourceRef.Provider)` / `string(AgentDef.Type)` for every
+migrated provider. The watched-root match is a cleaned absolute path-prefix
+comparison against persisted `sessions.file_path` values, after normalizing path
+separators with the platform `filepath` rules already used by the sync engine.
+The lookup does not resolve symlinks or inspect provider virtual suffixes. Today
+the DB-backed virtual shape is `<clean-db-path>#<session-id>`, so a watch root
+that is the DB directory matches those paths by ordinary directory prefix; if a
+future provider persists a virtual format that does not preserve a cleaned root
+prefix, it cannot use `StoredSourcePathsProviderRoot` until it also adds a
+different explicit hint mode and store query contract. Duplicate suppression
+happens after the same cleaning step used for prefix matching. The API must not
+silently cap results; if an implementation needs batching, it must stream or
+accumulate all matching paths before classification, or return an error and let
+the caller fall back to the provider's full discovery path.
+
 Persisted source paths are compatibility keys. Providers that request stored
 hints must continue to understand their previously persisted virtual path
 formats, or require a documented full resync for a format change. Malformed or
-obsolete stored paths are ignored for tombstone recovery and reported through
-diagnostics; they must not make the whole changed-path classification fail.
+obsolete stored paths are ignored for tombstone recovery and may be logged as
+debug provider diagnostics; they are not parse diagnostics, are not user-visible
+session errors, and must not make the whole changed-path classification fail.
 
 The provider owns the final changed-path decision. The engine may use
 `IncludeGlobs` and `ExcludeGlobs` as coarse prefilters because the provider
@@ -1201,8 +1218,9 @@ Required tests:
   session watch flows, export/source lookup, token usage raw-source probing,
   source mtime, and parse diagnostics. Changed-path caller tests must include
   provider/root-scoped `StoredSourcePaths` collection, index-backed lookup with
-  unrelated large tables, malformed stale source-path tolerance, plus DB row
-  deletion and DB file deletion tombstone flows for SQLite fan-out providers.
+  unrelated large tables, batching/no-truncation behavior, path normalization,
+  malformed stale source-path tolerance in provider tests, plus DB row deletion
+  and DB file deletion tombstone flows for SQLite fan-out providers.
 - Generated tooling check for `enumer` output.
 - Adding-provider checklist test that fails until registry, capabilities,
   fixtures, source behavior, migration-mode wiring, parity coverage, and docs
