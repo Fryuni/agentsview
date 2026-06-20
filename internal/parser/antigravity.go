@@ -89,6 +89,13 @@ func AntigravityFileInfo(path string) (os.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	return antigravityCLICombinedFileInfo(
+		info,
+		antigravityIDECompanionPaths(path)...,
+	), nil
+}
+
+func antigravityIDECompanionPaths(path string) []string {
 	id := strings.TrimSuffix(filepath.Base(path), ".db")
 	root := filepath.Dir(filepath.Dir(path))
 	companions := []string{
@@ -96,10 +103,9 @@ func AntigravityFileInfo(path string) (os.FileInfo, error) {
 		path + "-shm",
 		filepath.Join(root, "annotations", id+".pbtxt"),
 	}
-	companions = append(companions, antigravityBrainCompanions(
+	return append(companions, antigravityBrainCompanions(
 		filepath.Join(root, "brain", id),
 	)...)
-	return antigravityCLICombinedFileInfo(info, companions...), nil
 }
 
 // ParseAntigravitySession parses one IDE session DB.

@@ -166,7 +166,7 @@ func (s antigravityCLISourceSet) Discover(ctx context.Context) ([]SourceRef, err
 }
 
 func (s antigravityCLISourceSet) WatchPlan(context.Context) (WatchPlan, error) {
-	roots := make([]WatchRoot, 0, len(s.roots)*3)
+	roots := make([]WatchRoot, 0, len(s.roots)*4)
 	for _, root := range s.roots {
 		roots = append(roots,
 			WatchRoot{
@@ -180,6 +180,12 @@ func (s antigravityCLISourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 				Recursive:    false,
 				IncludeGlobs: []string{"*.db", "*.db-*", "*.pb", "*.trajectory.json"},
 				DebounceKey:  string(AgentAntigravityCLI) + ":conversations:" + root,
+			},
+			WatchRoot{
+				Path:         root,
+				Recursive:    false,
+				IncludeGlobs: []string{"history.jsonl"},
+				DebounceKey:  string(AgentAntigravityCLI) + ":history:" + root,
 			},
 			WatchRoot{
 				Path:         filepath.Join(root, "implicit"),
@@ -222,7 +228,7 @@ func (s antigravityCLISourceSet) FindSource(
 			continue
 		}
 		for _, root := range s.roots {
-			if source, ok := s.sourceRef(root, path, "", true); ok {
+			if source, ok := s.storedSourceRef(root, path); ok {
 				return source, true, nil
 			}
 		}
@@ -270,7 +276,10 @@ func (s antigravityCLISourceSet) Fingerprint(
 		}
 		return SourceFingerprint{}, err
 	}
-	hash, err := hashJSONLSourceFile(src.Path)
+	hash, err := antigravityCompositeHash(
+		src.Path,
+		antigravityCLICompanionPaths(src.Path)...,
+	)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -309,6 +318,9 @@ func (s antigravityCLISourceSet) sourcesForChangedPath(
 ) []SourceRef {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
+	if samePath(path, filepath.Join(root, "history.jsonl")) {
+		return s.sourcesForHistoryChange(root)
+	}
 	if sourcePath, id, ok := antigravityCLISourcePathForEvent(root, path); ok {
 		if source, ok := s.sourceRef(root, sourcePath, s.projectForID(root, id), true); ok {
 			return []SourceRef{source}
@@ -332,6 +344,33 @@ func (s antigravityCLISourceSet) sourcesForChangedPath(
 		return sources
 	}
 	return nil
+}
+
+func (s antigravityCLISourceSet) sourcesForHistoryChange(root string) []SourceRef {
+	var sources []SourceRef
+	seen := make(map[string]struct{})
+	for _, file := range DiscoverAntigravityCLISessions(root) {
+		source, ok := s.sourceRef(root, file.Path, file.Project, false)
+		if ok {
+			addJSONLSource(source, &sources, seen)
+		}
+	}
+	sortJSONLSources(sources)
+	return sources
+}
+
+func (s antigravityCLISourceSet) storedSourceRef(
+	root, path string,
+) (SourceRef, bool) {
+	id, ok := antigravityCLISessionIDForPath(root, path)
+	if !ok {
+		return SourceRef{}, false
+	}
+	projectID := strings.TrimPrefix(id, antigravityImplicitTag)
+	if currentPath := FindAntigravityCLISourceFile(root, id); currentPath != "" {
+		return s.sourceRef(root, currentPath, s.projectForID(root, projectID), false)
+	}
+	return s.sourceRef(root, path, s.projectForID(root, projectID), true)
 }
 
 func (s antigravityCLISourceSet) sourceRef(

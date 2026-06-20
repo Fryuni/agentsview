@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -758,13 +759,21 @@ func decryptAntigravityCLITranscript(
 // AntigravityCLIFileInfo returns a fake os.FileInfo whose size and
 // mtime combine the session file with everything else the parser
 // renders: SQLite WAL/SHM siblings, the .trajectory.json sidecar,
-// and the brain/<id> artifacts.
+// history.jsonl fallback rows, and the brain/<id> artifacts.
 func AntigravityCLIFileInfo(path string) (os.FileInfo, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
 	}
+	return antigravityCLICombinedFileInfo(
+		info,
+		antigravityCLICompanionPaths(path)...,
+	), nil
+}
+
+func antigravityCLICompanionPaths(path string) []string {
 	root := filepath.Dir(filepath.Dir(path))
+	historyPath := filepath.Join(root, "history.jsonl")
 	if base, ok := strings.CutSuffix(path, ".db"); ok {
 		// The trajectory sidecar is a transcript source for .db sessions
 		// too, so an agy-reader sync must change the fingerprint even when
@@ -773,21 +782,21 @@ func AntigravityCLIFileInfo(path string) (os.FileInfo, error) {
 			path + "-wal",
 			path + "-shm",
 			base + ".trajectory.json",
+			historyPath,
 		}
-		companions = append(companions, antigravityBrainCompanions(
+		return append(companions, antigravityBrainCompanions(
 			filepath.Join(root, "brain", filepath.Base(base)),
 		)...)
-		return antigravityCLICombinedFileInfo(info, companions...), nil
 	}
 
 	id := strings.TrimSuffix(filepath.Base(path), ".pb")
 	companions := []string{
 		strings.TrimSuffix(path, ".pb") + ".trajectory.json",
+		historyPath,
 	}
-	companions = append(companions, antigravityBrainCompanions(
+	return append(companions, antigravityBrainCompanions(
 		filepath.Join(root, "brain", id),
 	)...)
-	return antigravityCLICombinedFileInfo(info, companions...), nil
 }
 
 // antigravityBrainCompanions lists the brain artifact files the
@@ -834,6 +843,73 @@ func antigravityCLICombinedFileInfo(
 		size:  size,
 		mtime: mtime,
 	}
+}
+
+func antigravityCompositeHash(path string, companions ...string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("stat %s: %w", path, err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("stat %s: source is a directory", path)
+	}
+
+	h := sha256.New()
+	if err := addAntigravityFingerprintPart(h, "source", path, info); err != nil {
+		return "", err
+	}
+
+	sort.Strings(companions)
+	var prev string
+	for _, companion := range companions {
+		if companion == "" || companion == prev {
+			continue
+		}
+		prev = companion
+		info, err := os.Stat(companion)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		if err := addAntigravityFingerprintPart(
+			h,
+			"companion",
+			companion,
+			info,
+		); err != nil {
+			continue
+		}
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+func addAntigravityFingerprintPart(
+	h interface{ Write([]byte) (int, error) },
+	label string,
+	path string,
+	info os.FileInfo,
+) error {
+	if _, err := fmt.Fprintf(
+		h,
+		"%s\x00%s\x00%d\x00%d\x00",
+		label,
+		path,
+		info.Size(),
+		info.ModTime().UnixNano(),
+	); err != nil {
+		return err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("hash %s: %w", path, err)
+	}
+	if _, err := h.Write([]byte{0}); err != nil {
+		return err
+	}
+	return nil
 }
 
 type fakeFileInfo struct {

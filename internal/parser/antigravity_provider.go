@@ -256,7 +256,10 @@ func (s antigravitySourceSet) Fingerprint(
 		}
 		return SourceFingerprint{}, err
 	}
-	hash, err := hashJSONLSourceFile(src.Path)
+	hash, err := antigravityCompositeHash(
+		src.Path,
+		antigravityIDECompanionPaths(src.Path)...,
+	)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,13 +153,16 @@ func TestAntigravityCLIProviderSourceMethods(t *testing.T) {
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
-	require.Len(t, plan.Roots, 3)
+	require.Len(t, plan.Roots, 4)
 	assert.Equal(t, filepath.Join(root, "brain"), plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
 	assert.Equal(t, filepath.Join(root, "conversations"), plan.Roots[1].Path)
 	assert.False(t, plan.Roots[1].Recursive)
-	assert.Equal(t, filepath.Join(root, "implicit"), plan.Roots[2].Path)
+	assert.Equal(t, root, plan.Roots[2].Path)
 	assert.False(t, plan.Roots[2].Recursive)
+	assert.Equal(t, []string{"history.jsonl"}, plan.Roots[2].IncludeGlobs)
+	assert.Equal(t, filepath.Join(root, "implicit"), plan.Roots[3].Path)
+	assert.False(t, plan.Roots[3].Recursive)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -193,6 +197,19 @@ func TestAntigravityCLIProviderSourceMethods(t *testing.T) {
 		context.Background(),
 		ChangedPathRequest{
 			Path:      filepath.Join(root, "brain", id, "task.md"),
+			EventKind: "write",
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 2)
+	assert.Equal(t, dbPath, changed[0].DisplayPath)
+	assert.Equal(t, implicitPath, changed[1].DisplayPath)
+
+	changed, err = provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:      filepath.Join(root, "history.jsonl"),
+			WatchRoot: root,
 			EventKind: "write",
 		},
 	)
@@ -248,6 +265,134 @@ func TestAntigravityCLIProviderFingerprintParseAndRetry(t *testing.T) {
 	assert.Equal(t, "devbox", result.Result.Session.Machine)
 	assert.Equal(t, after.Hash, result.Result.Session.File.Hash)
 	assert.NotEmpty(t, result.Result.Messages)
+}
+
+func TestAntigravityProviderFingerprintTracksSideInputs(t *testing.T) {
+	root := t.TempDir()
+	id := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	writeAntigravityIDEProviderFixture(t, root, id)
+
+	provider, ok := NewProvider(AgentAntigravity, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: id,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	before, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+
+	mustWrite(t,
+		filepath.Join(root, "annotations", id+".pbtxt"),
+		[]byte("last_user_view_time:{seconds:1779326599 nanos:0}\n"))
+	afterAnnotation, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.NotEqual(t, before.Hash, afterAnnotation.Hash)
+
+	mustWrite(t, filepath.Join(root, "brain", id, "plan.md"), []byte("# Changed"))
+	afterBrain, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.NotEqual(t, afterAnnotation.Hash, afterBrain.Hash)
+
+	require.NoError(t, os.Remove(filepath.Join(root, "brain", id, "plan.md")))
+	afterDelete, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.NotEqual(t, afterBrain.Hash, afterDelete.Hash)
+}
+
+func TestAntigravityCLIProviderFindSourceCanonicalizesStoredConversationPath(t *testing.T) {
+	root := t.TempDir()
+	id := "55555555-6666-7777-8888-999999999999"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	pbPath := filepath.Join(root, "conversations", id+".pb")
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	mustWrite(t, pbPath, []byte("pb"))
+
+	provider, ok := NewProvider(AgentAntigravityCLI, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		StoredFilePath: pbPath,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, pbPath, found.DisplayPath)
+
+	mustWrite(t, dbPath, []byte("db"))
+	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+		StoredFilePath: pbPath,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, dbPath, found.DisplayPath)
+
+	require.NoError(t, os.Remove(dbPath))
+	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+		StoredFilePath: dbPath,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, pbPath, found.DisplayPath)
+}
+
+func TestAntigravityCLIProviderFingerprintTracksSideInputs(t *testing.T) {
+	root := t.TempDir()
+	id := "33333333-4444-5555-6666-777777777777"
+	implicitPath := filepath.Join(root, "implicit", id+".pb")
+	writeAntigravityCLIProviderFixture(t, root, id)
+
+	provider, ok := NewProvider(AgentAntigravityCLI, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: id,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	before, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"changed prompt","timestamp":1779000000000,`+
+			`"workspace":"/tmp/db-proj","conversationId":"`+id+`"}`))
+	afterHistory, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.NotEqual(t, before.Hash, afterHistory.Hash)
+
+	mustWrite(t, filepath.Join(root, "brain", id, "task.md"), []byte("# Changed"))
+	afterBrain, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.NotEqual(t, afterHistory.Hash, afterBrain.Hash)
+
+	writeAntigravityTestSidecar(t, root, id, 3)
+	afterSidecar, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.NotEqual(t, afterBrain.Hash, afterSidecar.Hash)
+
+	implicitSource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: antigravityImplicitTag + id,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	beforeImplicit, err := provider.Fingerprint(context.Background(), implicitSource)
+	require.NoError(t, err)
+
+	mustWrite(t,
+		strings.TrimSuffix(implicitPath, ".pb")+".trajectory.json",
+		[]byte(`{"trajectoryId":"implicit","steps":[]}`))
+	afterImplicit, err := provider.Fingerprint(context.Background(), implicitSource)
+	require.NoError(t, err)
+	assert.NotEqual(t, beforeImplicit.Hash, afterImplicit.Hash)
 }
 
 func writeAntigravityIDEProviderFixture(t *testing.T, root, id string) {
