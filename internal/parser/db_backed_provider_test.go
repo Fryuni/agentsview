@@ -176,8 +176,22 @@ func TestDBBackedProviderDeletedRowFingerprintsTombstoneAndSkips(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
+	assert.Equal(t, dbPath+"#conv-001", source.DisplayPath)
 	_, err = db.Exec(`DELETE FROM conversations WHERE conversation_id = ?`, "conv-001")
 	require.NoError(t, err)
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:              dbPath,
+			EventKind:         "write",
+			WatchRoot:         root,
+			StoredSourcePaths: []string{dbPath + "#conv-001"},
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	source = changed[0]
 
 	fingerprint, err := provider.Fingerprint(context.Background(), source)
 	require.NoError(t, err)
@@ -206,9 +220,23 @@ func TestDBBackedProviderMissingDBFingerprintsTombstoneAndSkips(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
+	assert.Equal(t, virtualPath, source.DisplayPath)
 
 	require.NoError(t, db.Close())
 	require.NoError(t, os.Remove(dbPath))
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:              dbPath,
+			EventKind:         "remove",
+			WatchRoot:         root,
+			StoredSourcePaths: []string{virtualPath},
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	source = changed[0]
 
 	fingerprint, err := provider.Fingerprint(context.Background(), source)
 	require.NoError(t, err)

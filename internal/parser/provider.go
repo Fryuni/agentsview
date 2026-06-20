@@ -184,6 +184,12 @@ type ChangedPathRequest struct {
 	Path      string
 	EventKind string
 	WatchRoot string
+	// StoredSourcePaths are optional provider-persisted source paths already
+	// known to the caller for this watch root. Providers that model a shared
+	// physical file as virtual per-session sources use these to emit tombstone
+	// sources when a DB row or DB file has disappeared and can no longer be
+	// rediscovered from current metadata.
+	StoredSourcePaths []string
 }
 
 // FindSourceRequest contains persisted source hints for provider-owned lookup.

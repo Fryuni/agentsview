@@ -240,6 +240,17 @@ func (s dbBackedSourceSet) SourcesForChangedPath(
 				seen,
 			)
 		}
+		for _, path := range req.StoredSourcePaths {
+			ref, ok := s.sourceRef(root, path, true)
+			if !ok {
+				continue
+			}
+			src := ref.Opaque.(dbBackedSource)
+			if !samePath(src.DBPath, dbPath) {
+				continue
+			}
+			addJSONLSource(ref, &sources, seen)
+		}
 		sortJSONLSources(sources)
 		return sources, nil
 	}
@@ -373,7 +384,7 @@ func (s dbBackedSourceSet) dbPathForEvent(root, path string) (string, bool) {
 		rel == s.spec.dbName+"-wal" ||
 		rel == s.spec.dbName+"-shm" {
 		dbPath := filepath.Join(root, s.spec.dbName)
-		return dbPath, IsRegularFile(dbPath)
+		return dbPath, true
 	}
 	return "", false
 }
