@@ -234,6 +234,178 @@ func TestAntigravityCLIProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, implicitPath, changed[1].DisplayPath)
 }
 
+func TestAntigravityCLIProviderHistoryRemovalInvalidatesAllSources(t *testing.T) {
+	root := t.TempDir()
+	id := "33333333-4444-5555-6666-777777777777"
+	otherID := "88888888-9999-aaaa-bbbb-cccccccccccc"
+	writeAntigravityCLIProviderFixture(t, root, id)
+	mustWrite(t, filepath.Join(root, "conversations", otherID+".db"), []byte("db"))
+
+	provider, ok := NewProvider(AgentAntigravityCLI, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	historyPath := filepath.Join(root, "history.jsonl")
+	require.NoError(t, os.Remove(historyPath))
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:      historyPath,
+			WatchRoot: root,
+			EventKind: "remove",
+		},
+	)
+	require.NoError(t, err)
+	assertAntigravityCLISourcePaths(t, changed,
+		filepath.Join(root, "conversations", id+".db"),
+		filepath.Join(root, "conversations", otherID+".db"),
+		filepath.Join(root, "implicit", id+".pb"),
+	)
+}
+
+func TestAntigravityCLIProviderHistoryTruncationInvalidatesAllSources(t *testing.T) {
+	root := t.TempDir()
+	id := "33333333-4444-5555-6666-777777777777"
+	otherID := "88888888-9999-aaaa-bbbb-cccccccccccc"
+	writeAntigravityCLIProviderFixture(t, root, id)
+	mustWrite(t, filepath.Join(root, "conversations", otherID+".db"), []byte("db"))
+
+	provider, ok := NewProvider(AgentAntigravityCLI, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	historyPath := filepath.Join(root, "history.jsonl")
+	mustWrite(t, historyPath, nil)
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:      historyPath,
+			WatchRoot: root,
+			EventKind: "write",
+		},
+	)
+	require.NoError(t, err)
+	assertAntigravityCLISourcePaths(t, changed,
+		filepath.Join(root, "conversations", id+".db"),
+		filepath.Join(root, "conversations", otherID+".db"),
+		filepath.Join(root, "implicit", id+".pb"),
+	)
+}
+
+func TestAntigravityCLIProviderHistoryReadErrorInvalidatesAllSources(t *testing.T) {
+	root := t.TempDir()
+	id := "33333333-4444-5555-6666-777777777777"
+	otherID := "88888888-9999-aaaa-bbbb-cccccccccccc"
+	writeAntigravityCLIProviderFixture(t, root, id)
+	mustWrite(t, filepath.Join(root, "conversations", otherID+".db"), []byte("db"))
+
+	provider, ok := NewProvider(AgentAntigravityCLI, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	historyPath := filepath.Join(root, "history.jsonl")
+	mustWrite(t, historyPath, []byte(strings.Repeat("x", 4*1024*1024+1)))
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:      historyPath,
+			WatchRoot: root,
+			EventKind: "write",
+		},
+	)
+	require.NoError(t, err)
+	assertAntigravityCLISourcePaths(t, changed,
+		filepath.Join(root, "conversations", id+".db"),
+		filepath.Join(root, "conversations", otherID+".db"),
+		filepath.Join(root, "implicit", id+".pb"),
+	)
+}
+
+func TestAntigravityCLIProviderHistoryRetagInvalidatesAllSources(t *testing.T) {
+	root := t.TempDir()
+	id := "33333333-4444-5555-6666-777777777777"
+	otherID := "88888888-9999-aaaa-bbbb-cccccccccccc"
+	writeAntigravityCLIProviderFixture(t, root, id)
+	mustWrite(t, filepath.Join(root, "conversations", otherID+".db"), []byte("db"))
+
+	provider, ok := NewProvider(AgentAntigravityCLI, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	historyPath := filepath.Join(root, "history.jsonl")
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:      historyPath,
+			WatchRoot: root,
+			EventKind: "write",
+		},
+	)
+	require.NoError(t, err)
+	assertAntigravityCLISourcePaths(t, changed,
+		filepath.Join(root, "conversations", id+".db"),
+		filepath.Join(root, "implicit", id+".pb"),
+	)
+
+	mustWrite(t, historyPath,
+		[]byte(`{"display":"retagged prompt","timestamp":1779000000000,`+
+			`"workspace":"/tmp/other","conversationId":"`+otherID+`"}`))
+	changed, err = provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:      historyPath,
+			WatchRoot: root,
+			EventKind: "write",
+		},
+	)
+	require.NoError(t, err)
+	assertAntigravityCLISourcePaths(t, changed,
+		filepath.Join(root, "conversations", id+".db"),
+		filepath.Join(root, "conversations", otherID+".db"),
+		filepath.Join(root, "implicit", id+".pb"),
+	)
+}
+
+func TestAntigravityCLIProviderUntaggedHistoryInvalidatesAllSources(t *testing.T) {
+	root := t.TempDir()
+	id := "33333333-4444-5555-6666-777777777777"
+	otherID := "88888888-9999-aaaa-bbbb-cccccccccccc"
+	writeAntigravityCLIProviderFixture(t, root, id)
+	mustWrite(t, filepath.Join(root, "conversations", otherID+".db"), []byte("db"))
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"untagged prompt","timestamp":1779000000000,`+
+			`"workspace":"/tmp/fallback"}`))
+
+	provider, ok := NewProvider(AgentAntigravityCLI, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:      filepath.Join(root, "history.jsonl"),
+			WatchRoot: root,
+			EventKind: "write",
+		},
+	)
+	require.NoError(t, err)
+	assertAntigravityCLISourcePaths(t, changed,
+		filepath.Join(root, "conversations", id+".db"),
+		filepath.Join(root, "conversations", otherID+".db"),
+		filepath.Join(root, "implicit", id+".pb"),
+	)
+}
+
 func TestAntigravityCLIProviderFingerprintParseAndRetry(t *testing.T) {
 	root := t.TempDir()
 	id := "44444444-5555-6666-7777-888888888888"
@@ -454,4 +626,17 @@ func writeAntigravityCLIProviderFixture(t *testing.T, root, id string) {
 	mustWrite(t, filepath.Join(root, "history.jsonl"),
 		[]byte(`{"display":"db prompt fallback","timestamp":1779000000000,`+
 			`"workspace":"/tmp/db-proj","conversationId":"`+id+`"}`))
+}
+
+func assertAntigravityCLISourcePaths(
+	t *testing.T,
+	sources []SourceRef,
+	want ...string,
+) {
+	t.Helper()
+	got := make([]string, 0, len(sources))
+	for _, source := range sources {
+		got = append(got, source.DisplayPath)
+	}
+	assert.Equal(t, want, got)
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/tidwall/gjson"
 )
@@ -143,11 +144,16 @@ type antigravityCLISource struct {
 }
 
 type antigravityCLISourceSet struct {
-	roots []string
+	roots   []string
+	history *antigravityCLIHistoryState
 }
 
 func newAntigravityCLISourceSet(roots []string) antigravityCLISourceSet {
-	return antigravityCLISourceSet{roots: cleanJSONLRoots(roots)}
+	roots = cleanJSONLRoots(roots)
+	return antigravityCLISourceSet{
+		roots:   roots,
+		history: newAntigravityCLIHistoryState(roots),
+	}
 }
 
 func (s antigravityCLISourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
@@ -212,7 +218,7 @@ func (s antigravityCLISourceSet) SourcesForChangedPath(
 		if req.WatchRoot != "" && !antigravityCLIWatchRootMatches(root, req.WatchRoot) {
 			continue
 		}
-		if sources := s.sourcesForChangedPath(root, req.Path); len(sources) > 0 {
+		if sources := s.sourcesForChangedPath(root, req); len(sources) > 0 {
 			return sources, nil
 		}
 	}
@@ -314,12 +320,13 @@ func (s antigravityCLISourceSet) sourceFromRef(
 }
 
 func (s antigravityCLISourceSet) sourcesForChangedPath(
-	root, path string,
+	root string,
+	req ChangedPathRequest,
 ) []SourceRef {
 	root = filepath.Clean(root)
-	path = filepath.Clean(path)
+	path := filepath.Clean(req.Path)
 	if samePath(path, filepath.Join(root, "history.jsonl")) {
-		return s.sourcesForHistoryChange(root)
+		return s.sourcesForHistoryChange(root, req)
 	}
 	if sourcePath, id, ok := antigravityCLISourcePathForEvent(root, path); ok {
 		if source, ok := s.sourceRef(root, sourcePath, s.projectForID(root, id), true); ok {
@@ -346,14 +353,40 @@ func (s antigravityCLISourceSet) sourcesForChangedPath(
 	return nil
 }
 
-func (s antigravityCLISourceSet) sourcesForHistoryChange(root string) []SourceRef {
-	ids, hasUntaggedRows := antigravityCLIHistorySourceIDs(
-		filepath.Join(root, "history.jsonl"),
-	)
-	if hasUntaggedRows {
+func (s antigravityCLISourceSet) sourcesForHistoryChange(
+	root string,
+	req ChangedPathRequest,
+) []SourceRef {
+	if antigravityCLIHistoryChangeIsDestructive(req) {
+		s.historyState().clear(root)
 		return s.sourcesForUntaggedHistoryChange(root)
 	}
 
+	snapshot, err := readAntigravityCLIHistorySnapshot(
+		filepath.Join(root, "history.jsonl"),
+	)
+	if err != nil {
+		s.historyState().clear(root)
+		return s.sourcesForUntaggedHistoryChange(root)
+	}
+
+	state := s.historyState()
+	previous, hadPrevious := state.snapshot(root)
+	state.update(root, snapshot)
+	if snapshot.hasUntaggedRows ||
+		!snapshot.hasRows ||
+		!hadPrevious ||
+		previous.hasUntaggedRows ||
+		!antigravityCLIHistoryIDsSuperset(snapshot.ids, previous.ids) {
+		return s.sourcesForUntaggedHistoryChange(root)
+	}
+	return s.sourcesForHistoryIDs(root, snapshot.ids)
+}
+
+func (s antigravityCLISourceSet) sourcesForHistoryIDs(
+	root string,
+	ids map[string]struct{},
+) []SourceRef {
 	var sources []SourceRef
 	seen := make(map[string]struct{})
 	for id := range ids {
@@ -379,6 +412,13 @@ func (s antigravityCLISourceSet) sourcesForHistoryChange(root string) []SourceRe
 	return sources
 }
 
+func (s antigravityCLISourceSet) historyState() *antigravityCLIHistoryState {
+	if s.history != nil {
+		return s.history
+	}
+	return newAntigravityCLIHistoryState(nil)
+}
+
 func (s antigravityCLISourceSet) sourcesForUntaggedHistoryChange(root string) []SourceRef {
 	var sources []SourceRef
 	seen := make(map[string]struct{})
@@ -392,15 +432,71 @@ func (s antigravityCLISourceSet) sourcesForUntaggedHistoryChange(root string) []
 	return sources
 }
 
-func antigravityCLIHistorySourceIDs(historyPath string) (map[string]struct{}, bool) {
-	ids := make(map[string]struct{})
+type antigravityCLIHistorySnapshot struct {
+	ids             map[string]struct{}
+	hasRows         bool
+	hasUntaggedRows bool
+}
+
+type antigravityCLIHistoryState struct {
+	mu        sync.Mutex
+	snapshots map[string]antigravityCLIHistorySnapshot
+}
+
+func newAntigravityCLIHistoryState(roots []string) *antigravityCLIHistoryState {
+	state := &antigravityCLIHistoryState{
+		snapshots: make(map[string]antigravityCLIHistorySnapshot),
+	}
+	for _, root := range roots {
+		snapshot, err := readAntigravityCLIHistorySnapshot(
+			filepath.Join(root, "history.jsonl"),
+		)
+		if err == nil {
+			state.update(root, snapshot)
+		}
+	}
+	return state
+}
+
+func (s *antigravityCLIHistoryState) snapshot(
+	root string,
+) (antigravityCLIHistorySnapshot, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snapshot, ok := s.snapshots[filepath.Clean(root)]
+	if !ok {
+		return antigravityCLIHistorySnapshot{}, false
+	}
+	return cloneAntigravityCLIHistorySnapshot(snapshot), true
+}
+
+func (s *antigravityCLIHistoryState) update(
+	root string,
+	snapshot antigravityCLIHistorySnapshot,
+) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.snapshots[filepath.Clean(root)] = cloneAntigravityCLIHistorySnapshot(snapshot)
+}
+
+func (s *antigravityCLIHistoryState) clear(root string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.snapshots, filepath.Clean(root))
+}
+
+func readAntigravityCLIHistorySnapshot(
+	historyPath string,
+) (antigravityCLIHistorySnapshot, error) {
+	snapshot := antigravityCLIHistorySnapshot{
+		ids: make(map[string]struct{}),
+	}
 	f, err := os.Open(historyPath)
 	if err != nil {
-		return ids, false
+		return snapshot, err
 	}
 	defer f.Close()
 
-	var hasUntaggedRows bool
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	for sc.Scan() {
@@ -408,16 +504,59 @@ func antigravityCLIHistorySourceIDs(historyPath string) (map[string]struct{}, bo
 		if len(line) == 0 {
 			continue
 		}
+		snapshot.hasRows = true
 		cid := gjson.GetBytes(line, "conversationId").Str
 		if cid == "" {
-			hasUntaggedRows = true
+			snapshot.hasUntaggedRows = true
 			continue
 		}
 		if IsValidSessionID(cid) {
-			ids[cid] = struct{}{}
+			snapshot.ids[cid] = struct{}{}
 		}
 	}
-	return ids, hasUntaggedRows
+	if err := sc.Err(); err != nil {
+		return snapshot, err
+	}
+	return snapshot, nil
+}
+
+func cloneAntigravityCLIHistorySnapshot(
+	snapshot antigravityCLIHistorySnapshot,
+) antigravityCLIHistorySnapshot {
+	return antigravityCLIHistorySnapshot{
+		ids:             cloneAntigravityCLIHistoryIDs(snapshot.ids),
+		hasRows:         snapshot.hasRows,
+		hasUntaggedRows: snapshot.hasUntaggedRows,
+	}
+}
+
+func cloneAntigravityCLIHistoryIDs(ids map[string]struct{}) map[string]struct{} {
+	out := make(map[string]struct{}, len(ids))
+	for id := range ids {
+		out[id] = struct{}{}
+	}
+	return out
+}
+
+func antigravityCLIHistoryIDsSuperset(
+	current map[string]struct{},
+	previous map[string]struct{},
+) bool {
+	for id := range previous {
+		if _, ok := current[id]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func antigravityCLIHistoryChangeIsDestructive(req ChangedPathRequest) bool {
+	switch strings.ToLower(req.EventKind) {
+	case "remove", "removed", "delete", "deleted", "rename", "renamed":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s antigravityCLISourceSet) storedSourceRef(
